@@ -42,19 +42,19 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }.awaitOneOrNull()
 
     override suspend fun completeSuccess(key: UUID, operationId: UUID, payload: String) {
-        sql(
+        requireOneRowUpdated(sql(
         """UPDATE financial_operations_idempotency_store
            SET operation_id = :operationId, response_payload = CAST(:payload AS jsonb), status = 'SUCCESS'
            WHERE idempotency_key = :key""",
-        ).bind("operationId", operationId).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated()
+        ).bind("operationId", operationId).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated(), "complete financial idempotency")
     }
 
     override suspend fun completeError(key: UUID, payload: String) {
-        sql(
+        requireOneRowUpdated(sql(
         """UPDATE financial_operations_idempotency_store
            SET response_payload = CAST(:payload AS jsonb), status = 'ERROR'
            WHERE idempotency_key = :key""",
-        ).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated()
+        ).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated(), "complete financial idempotency error")
     }
 
     override suspend fun lockAccount(accountId: UUID): LockedAccount? = sql(
@@ -65,17 +65,17 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
             row.get("account_id", UUID::class.java)!!,
             row.get("balance", BigDecimal::class.java)!!,
             AccountStatus.valueOf(row.get("status", String::class.java)!!),
-            row.get("version", java.lang.Long::class.java)!!.toLong(),
+            row.get("version", Long::class.javaObjectType)!!,
         )
     }.awaitOneOrNull()
 
     override suspend fun updateBalance(accountId: UUID, balance: BigDecimal, updatedAt: Instant) {
-        sql(
-        """UPDATE user_accounts SET balance = :balance, version = version + 1, updated_at = :updatedAt 
+        requireOneRowUpdated(sql(
+        """UPDATE user_accounts SET balance = :balance, version = version + 1, updated_at = :updatedAt
            WHERE account_id = :accountId""",
     ).bind("balance", balance)
         .bind("updatedAt", OffsetDateTime.ofInstant(updatedAt, ZoneOffset.UTC))
-        .bind("accountId", accountId).fetch().awaitRowsUpdated()
+        .bind("accountId", accountId).fetch().awaitRowsUpdated(), "update account balance")
     }
 
     override suspend fun insertOperation(operation: FinancialOperation) {
@@ -117,9 +117,13 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
 
     override suspend fun countByAccount(accountId: UUID): Long = sql(
         "SELECT COUNT(*) AS count FROM financial_operations WHERE from_account_id = :accountId OR to_account_id = :accountId",
-    ).bind("accountId", accountId).map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.awaitOne()
+    ).bind("accountId", accountId).map { row, _ -> row.get("count", Long::class.javaObjectType)!! }.awaitOne()
 
     private fun sql(@Language("PostgreSQL") query: String) = databaseClient.sql(query)
+
+    private fun requireOneRowUpdated(rowsUpdated: Long, operation: String) {
+        check(rowsUpdated == 1L) { "Expected one row to be updated while attempting to $operation, but updated $rowsUpdated" }
+    }
 
     private fun mapOperation(row: Row, metadata: io.r2dbc.spi.RowMetadata) = FinancialOperation(
         row.get("operation_id", UUID::class.java)!!,

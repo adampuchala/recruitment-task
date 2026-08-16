@@ -48,11 +48,16 @@ services:
 
   redpanda-init:
     image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+    environment:
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-financial-operations}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        rpk topic create financial-operations -X brokers=redpanda:9092 --partitions 3 --replicas 1 || true;
-        rpk topic create financial-operations.DLT -X brokers=redpanda:9092 --partitions 3 --replicas 1 || true
+        set -eu;
+        for topic in "$${KAFKA_TOPIC}" "$${KAFKA_TOPIC}.DLT"; do
+          rpk topic create "$$topic" -X brokers=redpanda:9092 --partitions 3 --replicas 1 ||
+          rpk topic describe "$$topic" -X brokers=redpanda:9092 >/dev/null;
+        done
     depends_on:
       redpanda:
         condition: service_healthy
@@ -70,7 +75,7 @@ services:
       db-migrations:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8081'"]
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8081/actuator/health"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -85,7 +90,7 @@ services:
       db-migrations:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8082'"]
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8082/actuator/health"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -95,6 +100,7 @@ services:
     environment:
       <<: *database-environment
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-financial-operations}
     ports:
       - "8083:8083"
     depends_on:
@@ -103,7 +109,7 @@ services:
       redpanda-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8083'"]
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8083/actuator/health"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -113,6 +119,7 @@ services:
     environment:
       <<: *database-environment
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      AUDIT_TOPIC: ${KAFKA_TOPIC:-financial-operations}
     ports:
       - "8084:8084"
     depends_on:
@@ -121,7 +128,7 @@ services:
       redpanda-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8084'"]
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8084/actuator/health"]
       interval: 5s
       timeout: 3s
       retries: 30

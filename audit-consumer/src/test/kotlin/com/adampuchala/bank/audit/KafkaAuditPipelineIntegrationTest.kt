@@ -179,7 +179,7 @@ class KafkaAuditPipelineIntegrationTest {
         .map { row, _ -> row.get(0, String::class.java)!! }.awaitOne()
 
     private suspend fun longValue(sql: String): Long = databaseClient.sql(sql)
-        .map { row, _ -> row.get(0, java.lang.Long::class.java)!!.toLong() }.awaitOne()
+        .map { row, _ -> row.get(0, Long::class.javaObjectType)!! }.awaitOne()
 
     private fun migrate() {
         val repositoryRoot = File(System.getProperty("repo.root", "..")).canonicalFile

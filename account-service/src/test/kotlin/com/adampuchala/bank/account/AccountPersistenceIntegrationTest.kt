@@ -125,6 +125,6 @@ class AccountPersistenceIntegrationTest {
     }
 
     private suspend fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
-        .map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }
+        .map { row, _ -> row.get("count", Long::class.javaObjectType)!! }
         .one().awaitSingle()
 }

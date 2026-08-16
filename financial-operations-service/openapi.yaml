@@ -9,13 +9,13 @@ paths:
       summary: Deposit funds
       parameters: [{$ref: '#/components/parameters/AccountId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {$ref: '#/components/requestBodies/Money'}
-      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '500': {$ref: '#/components/responses/Error'}}
   /api/v1/accounts/{accountId}/withdrawals:
     post:
       summary: Withdraw funds
       parameters: [{$ref: '#/components/parameters/AccountId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {$ref: '#/components/requestBodies/Money'}
-      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '500': {$ref: '#/components/responses/Error'}}
   /api/v1/transfers:
     post:
       summary: Transfer funds
@@ -25,7 +25,7 @@ paths:
         content:
           application/json:
             schema: {$ref: '#/components/schemas/TransferRequest'}
-      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '500': {$ref: '#/components/responses/Error'}}
   /api/v1/accounts/{accountId}/operations:
     get:
       summary: Retrieve account operation history
@@ -35,6 +35,8 @@ paths:
         - {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
       responses:
         '200': {description: Operation page, content: {application/json: {schema: {$ref: '#/components/schemas/OperationPage'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
   /api/v1/operations/{operationId}:
     get:
       summary: Retrieve operation by ID
@@ -43,6 +45,7 @@ paths:
       responses:
         '200': {description: Operation, content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}}
         '404': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
 components:
   parameters:
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, format: uuid}}

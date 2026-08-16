@@ -4,6 +4,7 @@ package com.adampuchala.bank.financial
 import com.adampuchala.bank.financial.adapter.out.PostgresFinancialRepository
 import com.adampuchala.bank.financial.application.CommandResult
 import com.adampuchala.bank.financial.application.FinancialApplicationService
+import com.adampuchala.bank.financial.application.InvalidFinancialRequestException
 import com.adampuchala.bank.financial.domain.FinancialRepository
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
@@ -167,6 +168,15 @@ class FinancialConsistencyIntegrationTest {
         assertEquals(0L, count("financial_operations_idempotency_store"))
     }
 
+    @Test
+    fun `should reject invalid pagination instead of normalizing it`() = runBlocking {
+        val exception = assertFailsWith<InvalidFinancialRequestException> {
+            service.history(UUID.randomUUID(), page = -1, size = 0)
+        }
+
+        assertEquals("page must be at least 0 and size must be between 1 and 100", exception.message)
+    }
+
     private fun migrate() {
         val repositoryRoot = File(System.getProperty("repo.root", "..")).canonicalFile
         DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
@@ -196,7 +206,7 @@ class FinancialConsistencyIntegrationTest {
     ).bind("id", accountId).map { row, _ -> row.get("balance", BigDecimal::class.java)!! }.awaitOne()
 
     private suspend fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
-        .map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.awaitOne()
+        .map { row, _ -> row.get("count", Long::class.javaObjectType)!! }.awaitOne()
 
     private class FailingOutboxRepository(private val delegate: FinancialRepository) : FinancialRepository by delegate {
         override suspend fun insertOutbox(

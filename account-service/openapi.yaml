@@ -19,6 +19,7 @@ paths:
         '200': {description: Idempotent replay, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
         '400': {$ref: '#/components/responses/BadRequest'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/accounts/{accountId}:
     get:
       summary: Get account details
@@ -27,6 +28,7 @@ paths:
       responses:
         '200': {description: Account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/accounts/{accountId}/status:
     put:
       summary: Change account status
@@ -44,6 +46,7 @@ paths:
         '200': {description: Updated account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
 components:
   parameters:
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, format: uuid}}
@@ -78,3 +81,4 @@ components:
     BadRequest: {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
     NotFound: {description: Account not found, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
     Conflict: {description: Business or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+    InternalError: {description: Unexpected server error, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}

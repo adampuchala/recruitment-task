@@ -16,8 +16,8 @@ import java.time.Clock
 class OutboxPublisher(
     private val repository: OutboxRepository,
     private val kafkaTemplate: KafkaTemplate<String, String>,
-    @Value("\${outbox.topic:financial-operations}") private val topic: String,
-    @Value("\${outbox.batch-size:50}") private val batchSize: Int,
+    @param:Value("\${outbox.topic:financial-operations}") private val topic: String,
+    @param:Value("\${outbox.batch-size:50}") private val batchSize: Int,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)

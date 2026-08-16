@@ -132,7 +132,7 @@ Final state:
 - `db-migrations`: exited with code 0;
 - `redpanda-init`: exited with code 0.
 
-A second Liquibase execution succeeded as a no-op with all four changesets already applied.
+A second Liquibase execution succeeded with the fifth changeset applied; subsequent executions are no-ops.
 
 All service Dockerfiles are runtime-only. They copy an already-built JAR and do not run Gradle inside an image.
 

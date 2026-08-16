@@ -31,7 +31,7 @@ data class OperationResponse(
     val createdAt: Instant,
 )
 
-data class StoredBusinessError(val code: String, val message: String)
+data class StoredBusinessError(val code: String, val message: String, val timestamp: Instant)
 
 sealed interface CommandResult {
     data class Accepted(val response: OperationResponse, val replay: Boolean = false) : CommandResult
@@ -104,11 +104,10 @@ class FinancialApplicationService(
         ?: throw OperationNotFoundException()).toResponse(null)
 
     suspend fun history(accountId: UUID, page: Int, size: Int): OperationPage {
-        val safePage = page.coerceAtLeast(0)
-        val safeSize = size.coerceIn(1, 100)
-        val operations = repository.findByAccount(accountId, safeSize, safePage.toLong() * safeSize)
+        if (page < 0 || size !in 1..100) throw InvalidFinancialRequestException("page must be at least 0 and size must be between 1 and 100")
+        val operations = repository.findByAccount(accountId, size, page.toLong() * size)
         val total = repository.countByAccount(accountId)
-        return OperationPage(operations.map { it.toResponse(null) }, safePage, safeSize, total)
+        return OperationPage(operations.map { it.toResponse(null) }, page, size, total)
     }
 
     private suspend fun executeSingle(key: UUID, type: FinancialOperationType, accountId: UUID, amount: BigDecimal, description: String?): CommandResult =
@@ -170,15 +169,15 @@ class FinancialApplicationService(
     }
 
     private suspend fun reject(key: UUID, code: String, message: String): CommandResult {
-        val error = StoredBusinessError(code, message)
+        val error = StoredBusinessError(code, message, clock.instant())
         repository.completeError(key, objectMapper.writeValueAsString(error))
         return CommandResult.Rejected(error)
     }
 
     private fun validateActive(account: LockedAccount): StoredBusinessError? = when (account.status) {
         AccountStatus.ACTIVE -> null
-        AccountStatus.BLOCKED -> StoredBusinessError("ACCOUNT_BLOCKED", "The account is blocked")
-        AccountStatus.CLOSED -> StoredBusinessError("ACCOUNT_CLOSED", "The account is closed")
+        AccountStatus.BLOCKED -> StoredBusinessError("ACCOUNT_BLOCKED", "The account is blocked", clock.instant())
+        AccountStatus.CLOSED -> StoredBusinessError("ACCOUNT_CLOSED", "The account is closed", clock.instant())
     }
 
     private fun guardRequest(amount: BigDecimal, description: String?) {

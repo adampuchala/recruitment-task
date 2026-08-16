@@ -33,7 +33,7 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
                 lastName = row.get("last_name", String::class.java)!!,
                 balance = row.get("balance", java.math.BigDecimal::class.java)!!,
                 status = AccountStatus.valueOf(row.get("status", String::class.java)!!),
-                version = row.get("version", java.lang.Long::class.java)!!.toLong(),
+                version = row.get("version", Long::class.javaObjectType)!!,
                 createdAt = row.instant("created_at"),
                 updatedAt = row.instant("updated_at"),
             )
@@ -57,13 +57,13 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
     }
 
     override suspend fun updateStatus(accountId: UUID, status: AccountStatus, updatedAt: Instant) {
-        sql(
+        requireOneRowUpdated(sql(
         """UPDATE user_accounts SET status = :status, version = version + 1, updated_at = :updatedAt
            WHERE account_id = :accountId""",
     ).bind("status", status.name)
         .bind("updatedAt", OffsetDateTime.ofInstant(updatedAt, ZoneOffset.UTC))
         .bind("accountId", accountId)
-        .fetch().awaitRowsUpdated()
+        .fetch().awaitRowsUpdated(), "update account status")
     }
 
     override suspend fun tryInsertIdempotency(key: UUID, requestHash: String): Boolean = sql(
@@ -86,15 +86,19 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
     }.awaitOneOrNull()
 
     override suspend fun completeIdempotency(key: UUID, accountId: UUID, responsePayload: String) {
-        sql(
+        requireOneRowUpdated(sql(
         """UPDATE create_account_idempotency_store
            SET account_id = :accountId, response_payload = CAST(:payload AS jsonb), status = 'SUCCESS'
            WHERE idempotency_key = :key""",
-        ).bind("accountId", accountId).bind("payload", responsePayload).bind("key", key).fetch().awaitRowsUpdated()
+        ).bind("accountId", accountId).bind("payload", responsePayload).bind("key", key).fetch().awaitRowsUpdated(), "complete account idempotency")
     }
 
     private fun io.r2dbc.spi.Row.instant(column: String): Instant =
         get(column, OffsetDateTime::class.java)!!.toInstant()
 
     private fun sql(@Language("PostgreSQL") query: String) = databaseClient.sql(query)
+
+    private fun requireOneRowUpdated(rowsUpdated: Long, operation: String) {
+        check(rowsUpdated == 1L) { "Expected one row to be updated while attempting to $operation, but updated $rowsUpdated" }
+    }
 }

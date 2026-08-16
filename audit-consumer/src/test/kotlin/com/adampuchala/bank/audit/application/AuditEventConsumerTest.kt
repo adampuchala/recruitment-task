@@ -13,6 +13,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class AuditEventConsumerTest {
     private val objectMapper = ObjectMapper()
@@ -40,7 +41,20 @@ class AuditEventConsumerTest {
             override suspend fun handle(event: FinancialOperationCompleted): Boolean = true
         }, objectMapper)
 
-        kotlin.test.assertFailsWith<Exception> { consumer.consume("{not-json") }
+        assertFailsWith<Exception> { consumer.consume("{not-json") }
+    }
+
+    @Test
+    fun `should reject incomplete or semantically invalid event for retry and DLT handling`() = runTest {
+        val consumer = AuditEventConsumer(object : AuditEventHandler {
+            override suspend fun handle(event: FinancialOperationCompleted): Boolean = true
+        }, objectMapper)
+        val invalidDeposit = event().copy(toAccountId = null)
+
+        assertFailsWith<IllegalArgumentException> { consumer.consume(objectMapper.writeValueAsString(invalidDeposit)) }
+        assertFailsWith<IllegalArgumentException> {
+            consumer.consume(objectMapper.writeValueAsString(event()).replace("\"eventType\":\"FINANCIAL_OPERATION_COMPLETED\",", ""))
+        }
     }
 
     private fun event() = FinancialOperationCompleted(

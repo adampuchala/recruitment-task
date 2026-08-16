@@ -5,6 +5,7 @@ import com.adampuchala.bank.account.application.AccountNotFoundException
 import com.adampuchala.bank.account.application.IdempotencyConflictException
 import com.adampuchala.bank.account.application.InvalidStatusTransitionException
 import com.adampuchala.bank.account.application.NonZeroBalanceException
+import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.support.WebExchangeBindException
@@ -18,6 +19,8 @@ data class ApiError(val code: String, val message: String, val timestamp: Instan
 
 @RestControllerAdvice
 class ApiErrorHandler {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     @ExceptionHandler(AccountNotFoundException::class)
     fun notFound(ex: AccountNotFoundException, exchange: ServerWebExchange) = response(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", ex.message!!, exchange)
 
@@ -35,6 +38,12 @@ class ApiErrorHandler {
         } else {
             response(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Invalid request", exchange)
         }
+    }
+
+    @ExceptionHandler(Exception::class)
+    fun unexpected(ex: Exception, exchange: ServerWebExchange): ResponseEntity<ApiError> {
+        log.error("Unexpected API error path={} type={}", exchange.request.path.value(), ex.javaClass.simpleName)
+        return response(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An unexpected error occurred", exchange)
     }
 
     private fun response(status: HttpStatus, code: String, message: String, exchange: ServerWebExchange) =

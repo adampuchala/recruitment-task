@@ -7,6 +7,11 @@ import com.adampuchala.bank.account.domain.AccountStatus
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.media.Content
+import io.swagger.v3.oas.annotations.media.Schema
+import io.swagger.v3.oas.annotations.responses.ApiResponse
+import io.swagger.v3.oas.annotations.responses.ApiResponses
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
@@ -30,6 +35,14 @@ data class ChangeStatusRequest(val status: AccountStatus)
 @RequestMapping("/api/v1/accounts")
 class AccountController(private val service: AccountApplicationService) {
     @PostMapping
+    @Operation(summary = "Create an account idempotently")
+    @ApiResponses(
+        ApiResponse(responseCode = "201", description = "Created", content = [Content(schema = Schema(implementation = AccountView::class))]),
+        ApiResponse(responseCode = "200", description = "Idempotent replay", content = [Content(schema = Schema(implementation = AccountView::class))]),
+        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "409", description = "Idempotency conflict", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "500", description = "Unexpected error", content = [Content(schema = Schema(implementation = ApiError::class))]),
+    )
     suspend fun create(
         @RequestHeader("Idempotency-Key") idempotencyKey: UUID,
         @Valid @RequestBody request: CreateAccountRequest,
@@ -39,9 +52,23 @@ class AccountController(private val service: AccountApplicationService) {
     }
 
     @GetMapping("/{accountId}")
+    @Operation(summary = "Get account details")
+    @ApiResponses(
+        ApiResponse(responseCode = "200", description = "Account", content = [Content(schema = Schema(implementation = AccountView::class))]),
+        ApiResponse(responseCode = "404", description = "Account not found", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "500", description = "Unexpected error", content = [Content(schema = Schema(implementation = ApiError::class))]),
+    )
     suspend fun get(@PathVariable accountId: UUID): AccountView = service.get(accountId)
 
     @PutMapping("/{accountId}/status")
+    @Operation(summary = "Change account status")
+    @ApiResponses(
+        ApiResponse(responseCode = "200", description = "Updated account", content = [Content(schema = Schema(implementation = AccountView::class))]),
+        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "404", description = "Account not found", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "409", description = "Invalid status transition", content = [Content(schema = Schema(implementation = ApiError::class))]),
+        ApiResponse(responseCode = "500", description = "Unexpected error", content = [Content(schema = Schema(implementation = ApiError::class))]),
+    )
     suspend fun changeStatus(
         @PathVariable accountId: UUID,
         @Valid @RequestBody request: ChangeStatusRequest,

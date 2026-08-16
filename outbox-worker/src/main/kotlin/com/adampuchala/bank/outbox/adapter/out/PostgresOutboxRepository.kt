@@ -25,7 +25,7 @@ class PostgresOutboxRepository(private val databaseClient: DatabaseClient) : Out
             row.get("event_id", UUID::class.java)!!,
             row.get("operation_id", UUID::class.java)!!,
             row.get("payload", String::class.java)!!,
-            row.get("attempts", Integer::class.java)!!.toInt(),
+            row.get("attempts", Int::class.javaObjectType)!!,
         )
     }.all().asFlow().toList()
 
