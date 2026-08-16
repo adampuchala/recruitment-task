@@ -1,0 +1,27 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+server:
+  port: ${SERVER_PORT:8083}
+spring:
+  application:
+    name: outbox-worker
+  r2dbc:
+    url: ${DATABASE_URL:r2dbc:postgresql://localhost:5432/bank}
+    username: ${DATABASE_USER:bank}
+    password: ${DATABASE_PASSWORD:bank}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        acks: all
+outbox:
+  topic: ${KAFKA_TOPIC:financial-operations}
+  poll-delay-ms: ${OUTBOX_POLL_DELAY_MS:500}
+  batch-size: ${OUTBOX_BATCH_SIZE:50}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

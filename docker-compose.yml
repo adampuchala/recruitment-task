@@ -1,0 +1,127 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bank
+      POSTGRES_USER: bank
+      POSTGRES_PASSWORD: bank
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank -d bank"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  db-migrations:
+    build: ./infrastructure/db-migrations
+    environment:
+      LIQUIBASE_COMMAND_URL: jdbc:postgresql://postgres:5432/bank
+      LIQUIBASE_COMMAND_USERNAME: bank
+      LIQUIBASE_COMMAND_PASSWORD: bank
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        rpk topic create financial-operations -X brokers=redpanda:9092 --partitions 3 --replicas 1 || true;
+        rpk topic create financial-operations.DLT -X brokers=redpanda:9092 --partitions 3 --replicas 1 || true
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
+
+  account-service:
+    build: ./account-service
+    environment: &database-environment
+      DATABASE_URL: r2dbc:postgresql://postgres:5432/bank
+      DATABASE_USER: bank
+      DATABASE_PASSWORD: bank
+    ports:
+      - "8081:8081"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8081'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  financial-operations-service:
+    build: ./financial-operations-service
+    environment:
+      <<: *database-environment
+    ports:
+      - "8082:8082"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8082'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  outbox-worker:
+    build: ./outbox-worker
+    environment:
+      <<: *database-environment
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    ports:
+      - "8083:8083"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+      redpanda-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8083'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  audit-consumer:
+    build: ./audit-consumer
+    environment:
+      <<: *database-environment
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    ports:
+      - "8084:8084"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+      redpanda-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8084'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

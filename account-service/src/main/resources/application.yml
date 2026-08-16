@@ -1,0 +1,19 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+server:
+  port: ${SERVER_PORT:8081}
+spring:
+  application:
+    name: account-service
+  r2dbc:
+    url: ${DATABASE_URL:r2dbc:postgresql://localhost:5432/bank}
+    username: ${DATABASE_USER:bank}
+    password: ${DATABASE_PASSWORD:bank}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true

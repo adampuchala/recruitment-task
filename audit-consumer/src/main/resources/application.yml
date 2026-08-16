@@ -1,0 +1,27 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+server:
+  port: ${SERVER_PORT:8084}
+spring:
+  application:
+    name: audit-consumer
+  r2dbc:
+    url: ${DATABASE_URL:r2dbc:postgresql://localhost:5432/bank}
+    username: ${DATABASE_USER:bank}
+    password: ${DATABASE_PASSWORD:bank}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+audit:
+  topic: ${KAFKA_TOPIC:financial-operations}
+  group-id: ${KAFKA_CONSUMER_GROUP:financial-operations-audit}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

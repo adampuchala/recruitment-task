@@ -1,0 +1,103 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+openapi: 3.1.0
+info:
+  title: Financial Operations API
+  version: 1.0.0
+paths:
+  /api/v1/accounts/{accountId}/deposits:
+    post:
+      summary: Deposit funds
+      parameters: [{$ref: '#/components/parameters/AccountId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/Money'}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+  /api/v1/accounts/{accountId}/withdrawals:
+    post:
+      summary: Withdraw funds
+      parameters: [{$ref: '#/components/parameters/AccountId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/Money'}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+  /api/v1/transfers:
+    post:
+      summary: Transfer funds
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TransferRequest'}
+      responses: {'201': {$ref: '#/components/responses/CreatedOperation'}, '200': {$ref: '#/components/responses/ReplayedOperation'}, '400': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}
+  /api/v1/accounts/{accountId}/operations:
+    get:
+      summary: Retrieve account operation history
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - {name: page, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200': {description: Operation page, content: {application/json: {schema: {$ref: '#/components/schemas/OperationPage'}}}}
+  /api/v1/operations/{operationId}:
+    get:
+      summary: Retrieve operation by ID
+      parameters:
+        - {name: operationId, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Operation, content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+components:
+  parameters:
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, format: uuid}}
+    AccountId: {name: accountId, in: path, required: true, schema: {type: string, format: uuid}}
+  requestBodies:
+    Money:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/MoneyRequest'}
+  responses:
+    CreatedOperation: {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}}
+    ReplayedOperation: {description: Idempotent replay, content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}}
+    Error: {description: Error, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+  schemas:
+    MoneyRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount: {type: number, exclusiveMinimum: 0, multipleOf: 0.0001}
+        description: {type: string, maxLength: 500}
+    TransferRequest:
+      allOf:
+        - $ref: '#/components/schemas/MoneyRequest'
+        - type: object
+          required: [fromAccountId, toAccountId]
+          properties:
+            fromAccountId: {type: string, format: uuid}
+            toAccountId: {type: string, format: uuid}
+    Operation:
+      type: object
+      required: [operationId, type, status, amount, createdAt]
+      properties:
+        operationId: {type: string, format: uuid}
+        type: {type: string, enum: [DEPOSIT, WITHDRAWAL, TRANSFER]}
+        status: {type: string, enum: [SUCCESS]}
+        fromAccountId: {type: [string, 'null'], format: uuid}
+        toAccountId: {type: [string, 'null'], format: uuid}
+        amount: {type: number}
+        balanceAfter: {type: [number, 'null']}
+        description: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+    OperationPage:
+      type: object
+      required: [items, page, size, totalElements]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Operation'}}
+        page: {type: integer}
+        size: {type: integer}
+        totalElements: {type: integer, format: int64}
+    ApiError:
+      type: object
+      required: [code, message, timestamp, path]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        timestamp: {type: string, format: date-time}
+        path: {type: string}

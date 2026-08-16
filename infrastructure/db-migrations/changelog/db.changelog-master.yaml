@@ -1,0 +1,14 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+databaseChangeLog:
+  - include:
+      file: changes/001-accounts.sql
+      relativeToChangelogFile: true
+  - include:
+      file: changes/002-financial-operations.sql
+      relativeToChangelogFile: true
+  - include:
+      file: changes/003-outbox.sql
+      relativeToChangelogFile: true
+  - include:
+      file: changes/004-audit.sql
+      relativeToChangelogFile: true

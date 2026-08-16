@@ -1,3 +1,4 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar

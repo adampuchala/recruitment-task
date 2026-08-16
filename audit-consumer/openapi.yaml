@@ -1,0 +1,7 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+openapi: 3.1.0
+info: {title: Audit Consumer Health API, version: 1.0.0, description: No business API is exposed.}
+paths:
+  /actuator/health:
+    get:
+      responses: {'200': {description: Consumer health}}
