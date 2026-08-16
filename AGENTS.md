@@ -2,6 +2,8 @@
 
 This document is the implementation-level companion to [ARCHITECTURE.md](ARCHITECTURE.md). The architecture document describes the target design, API examples and trade-offs. This file defines the expected engineering approach and delivery rules. Agents implementing the system must execute [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) phase by phase.
 
+The completed coroutine migration is specified in [COROUTINES_MIGRATION_PLAN.md](COROUTINES_MIGRATION_PLAN.md). When implementing or reviewing that migration, it overrides only Reactor-specific programming-model details from the older plan; all architecture and consistency requirements remain binding.
+
 ## Copyright notice
 
 Every source, configuration, documentation and generated project file created or modified for this exercise must include the following note where the file format supports comments or metadata:
@@ -37,6 +39,7 @@ The mobile BFF and native mobile application are optional and should not delay c
 Use the following technologies unless a documented repository constraint requires otherwise:
 
 - Kotlin and Spring Boot services using Spring WebFlux and Netty;
+- Kotlin coroutines (`suspend`, `runTest`) as the application programming model over WebFlux;
 - Java 25;
 - reactive PostgreSQL access using Spring Data R2DBC and the PostgreSQL R2DBC driver;
 - Liquibase for database schema migrations;
@@ -48,6 +51,8 @@ Use the following technologies unless a documented repository constraint require
 - Springdoc/OpenAPI for generated API documentation.
 
 Do not use blocking JDBC/JPA access in request-handling paths. With WebFlux and Netty, database access must use R2DBC. If a blocking library is unavoidable in infrastructure code, isolate it explicitly and do not execute it on the Netty event-loop threads.
+
+Application and domain ports should not expose Reactor `Mono` or `Flux`; use suspending functions and bounded `List` results. Reactor remains a transitive framework implementation detail and may be used only where a Spring integration adapter explicitly requires it.
 
 The repository provides access to the terminal `spring init` command. Use it to generate Spring Boot service skeletons where useful rather than manually creating inconsistent project structures.
 
@@ -125,7 +130,7 @@ Use ISO-8601 timestamps in UTC at API and event boundaries. Persist timestamps c
 
 Financial commands must use a real database transaction with the correct Spring transaction boundary, for example an application service method annotated with `@Transactional`.
 
-For deposit, withdrawal and transfer:
+For deposit, withdrawal and transfer, use `TransactionalOperator.executeAndAwait` around the complete suspending command:
 
 1. validate request and identifiers;
 2. check idempotency key;

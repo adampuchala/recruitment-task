@@ -10,7 +10,7 @@ The solution consists of:
 
 - Account Service for account creation, retrieval, lifecycle management and account-creation idempotency;
 - Financial Operations Service for deposits, withdrawals, transfers and synchronous operation history;
-- Outbox Worker for reactive publication of committed financial-operation events;
+- Outbox Worker for coroutine-based, non-blocking publication of committed financial-operation events;
 - Audit Consumer for eventually consistent, deduplicated audit storage;
 - PostgreSQL with centrally managed Liquibase migrations;
 - Redpanda as the Kafka-compatible broker;
@@ -39,10 +39,11 @@ The Redpanda initialization creates:
 ## Key implementation decisions
 
 - Kotlin, Java 25 and Spring Boot 4.1.0 are used consistently.
+- Kotlin coroutines are used in controllers, application services, repository ports, Kafka consumer handling and the Outbox scheduler; Reactor remains only as an internal Spring/WebFlux/R2DBC bridge.
 - HTTP services use Spring WebFlux and Netty.
 - Runtime database access uses Spring Data R2DBC and the PostgreSQL R2DBC driver.
 - There is no JPA, Hibernate ORM, WebMVC or blocking JDBC in application code.
-- `R2dbcTransactionManager` and `TransactionalOperator` define explicit reactive transaction boundaries.
+- `R2dbcTransactionManager` and `TransactionalOperator.executeAndAwait` define explicit coroutine-aware reactive transaction boundaries.
 - Account rows are locked with `SELECT ... FOR UPDATE` on the transaction-bound R2DBC connection.
 - Transfers lock account UUIDs in deterministic order to prevent deadlocks.
 - Balance mutation, successful history, idempotency state and Outbox insertion commit atomically.
@@ -55,6 +56,18 @@ The Redpanda initialization creates:
 - Audit data is the only eventually consistent projection.
 - Money uses `BigDecimal` and PostgreSQL `NUMERIC(19,4)`.
 - API and event timestamps use ISO-8601 UTC.
+
+## Coroutine migration result
+
+The implementation was migrated according to [COROUTINES_MIGRATION_PLAN.md](COROUTINES_MIGRATION_PLAN.md). The migration did not change REST, database, Kafka or Docker contracts.
+
+- Account and Financial Operations repository ports now expose suspending functions.
+- R2DBC adapters use coroutine await extensions and bounded `List` results.
+- Financial transactions preserve the same connection, row-locking order and atomic write sequence through `executeAndAwait`.
+- Audit Consumer uses a suspending `@KafkaListener`; acknowledgement remains deferred until the transactional audit handler completes.
+- Outbox Worker uses a suspending fixed-delay scheduler, sequential publication and cancellation-safe retry handling.
+- The full build executed 21 tests with no failures or skips.
+- No production `Mono`, `Flux`, `.block()` or manual Reactor subscription remains in the four services.
 
 ## Automated test results
 
@@ -125,7 +138,7 @@ All service Dockerfiles are runtime-only. They copy an already-built JAR and do 
 
 ## Postman result
 
-The committed Postman collection was executed against a fresh Docker Compose environment using Newman:
+The repository's previously recorded Postman execution against a fresh Docker Compose environment used Newman:
 
 ```text
 Requests:   16 executed, 0 failed
@@ -144,6 +157,8 @@ The collection verifies:
 - blocked-account rejection;
 - closure of a zero-balance account;
 - terminal behavior of a closed account.
+
+During the coroutine migration verification, the `newman` executable was not installed and an `npx` download did not complete in the available environment, so no new Newman result is claimed for this run. An equivalent HTTP smoke test against the running Compose stack passed 13 checks: account creation, deposit, idempotent replay, transfer, withdrawal, balances, history, operation lookup, insufficient funds and blocked-account behavior. The Postman collection itself was not changed.
 
 ## Asynchronous integration QA
 
@@ -184,7 +199,7 @@ Additional runtime checks confirmed:
 - [x] Rejected operations create no Kafka event.
 - [x] Outbox events are published only after the financial transaction commits.
 - [x] Outbox publication retries after failures and tolerates duplicate publication windows.
-- [x] Audit consumption acknowledges only after the reactive database operation completes.
+- [x] Audit consumption acknowledges only after the suspending transactional database operation completes.
 - [x] Audit records are deduplicated by `event_id`.
 - [x] Retry, DLT and manual reprocessing are implemented and documented.
 - [x] Operation history remains independent of Kafka and immediately available.
@@ -194,7 +209,7 @@ Additional runtime checks confirmed:
 - [x] All four Spring services report healthy.
 - [x] Swagger UI and static OpenAPI specifications are available.
 - [x] The Postman happy path and error scenarios pass.
-- [x] Focused unit, reactive and Testcontainers integration tests pass.
+- [x] Focused unit, coroutine and Testcontainers integration tests pass.
 - [x] Mandatory documentation and copyright notices are present.
 - [x] Optional BFF, mobile, CQRS, cache and security work did not displace mandatory scope.
 

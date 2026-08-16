@@ -8,7 +8,7 @@ import com.adampuchala.bank.account.domain.AccountPolicy
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.stereotype.Service
 import org.springframework.transaction.reactive.TransactionalOperator
-import reactor.core.publisher.Mono
+import org.springframework.transaction.reactive.executeAndAwait
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -40,48 +40,53 @@ class AccountApplicationService(
     private val transactionalOperator: TransactionalOperator,
     private val clock: Clock = Clock.systemUTC(),
 ) {
-    fun create(idempotencyKey: UUID, firstName: String, lastName: String): Mono<CreationResult> {
+    suspend fun create(idempotencyKey: UUID, firstName: String, lastName: String): CreationResult {
         val normalizedFirst = firstName.trim()
         val normalizedLast = lastName.trim()
         val hash = sha256("$normalizedFirst\u0000$normalizedLast")
-        val work = repository.tryInsertIdempotency(idempotencyKey, hash).flatMap { inserted ->
-            if (!inserted) replay(idempotencyKey, hash) else createNew(idempotencyKey, normalizedFirst, normalizedLast)
+        return transactionalOperator.executeAndAwait {
+            if (repository.tryInsertIdempotency(idempotencyKey, hash)) {
+                createNew(idempotencyKey, normalizedFirst, normalizedLast)
+            } else {
+                replay(idempotencyKey, hash)
+            }
         }
-        return transactionalOperator.transactional(work)
     }
 
-    fun get(accountId: UUID): Mono<AccountView> = repository.findById(accountId)
-        .switchIfEmpty(Mono.error(AccountNotFoundException()))
-        .map { it.toView() }
+    suspend fun get(accountId: UUID): AccountView = repository.findById(accountId)
+        ?.toView()
+        ?: throw AccountNotFoundException()
 
-    fun changeStatus(accountId: UUID, target: AccountStatus): Mono<AccountView> {
-        val work = repository.findByIdForUpdate(accountId)
-            .switchIfEmpty(Mono.error(AccountNotFoundException()))
-            .flatMap { account ->
-                validateTransition(account, target)
-                if (account.status == target) Mono.just(account)
-                else repository.updateStatus(accountId, target, clock.instant())
-                    .then(repository.findById(accountId))
-            }.map { it.toView() }
-        return transactionalOperator.transactional(work)
+    suspend fun changeStatus(accountId: UUID, target: AccountStatus): AccountView = transactionalOperator.executeAndAwait {
+        val account = repository.findByIdForUpdate(accountId)
+            ?: throw AccountNotFoundException()
+        validateTransition(account, target)
+        if (account.status == target) {
+            account.toView()
+        } else {
+            repository.updateStatus(accountId, target, clock.instant())
+            (repository.findById(accountId) ?: throw AccountNotFoundException()).toView()
+        }
     }
 
-    private fun createNew(key: UUID, firstName: String, lastName: String): Mono<CreationResult> {
+    private suspend fun createNew(key: UUID, firstName: String, lastName: String): CreationResult {
         val now = clock.instant()
         val account = Account(UUID.randomUUID(), firstName, lastName, BigDecimal.ZERO.setScale(4), AccountStatus.ACTIVE, 0, now, now)
         val view = account.toView()
         val payload = objectMapper.writeValueAsString(view)
-        return repository.insert(account)
-            .then(repository.completeIdempotency(key, account.accountId, payload))
-            .thenReturn(CreationResult(view, false))
+        repository.insert(account)
+        repository.completeIdempotency(key, account.accountId, payload)
+        return CreationResult(view, false)
     }
 
-    private fun replay(key: UUID, hash: String): Mono<CreationResult> = repository.findIdempotency(key).flatMap { record ->
-        if (record.requestHash != hash) return@flatMap Mono.error(IdempotencyConflictException())
+    private suspend fun replay(key: UUID, hash: String): CreationResult {
+        val record = repository.findIdempotency(key)
+            ?: throw IllegalStateException("Idempotency request is incomplete")
+        if (record.requestHash != hash) throw IdempotencyConflictException()
         if (record.status != "SUCCESS" || record.responsePayload == null) {
-            return@flatMap Mono.error(IllegalStateException("Idempotency request is incomplete"))
+            throw IllegalStateException("Idempotency request is incomplete")
         }
-        Mono.just(CreationResult(objectMapper.readValue(record.responsePayload, AccountView::class.java), true))
+        return CreationResult(objectMapper.readValue(record.responsePayload, AccountView::class.java), true)
     }
 
     private fun validateTransition(account: Account, target: AccountStatus) {

@@ -67,7 +67,7 @@ Source of truth for the current account state and balance.
 | `last_name` | Account holder last name |
 | `balance` | `NUMERIC(19,4)`, must be non-negative |
 | `status` | `ACTIVE`, `BLOCKED` or `CLOSED` |
-| `version` | Optimistic-locking version; optional when using row locks |
+| `version` | Revision counter incremented on account mutations; reserved for a possible future optimistic-locking implementation |
 | `created_at` | Creation timestamp |
 | `updated_at` | Last update timestamp |
 
@@ -405,6 +405,24 @@ Suggested status codes:
 
 ## Architectural trade-offs
 
+### Pessimistic locking instead of full optimistic locking
+
+Financial operations use PostgreSQL row-level locks through `SELECT ... FOR UPDATE`. Account rows remain locked for the complete transaction containing balance validation, balance updates, operation history, idempotency state and the Outbox event. Transfers lock both accounts in deterministic UUID order to reduce the risk of deadlocks.
+
+The `version` column was introduced during the data-modeling phase with optimistic locking in mind. The current implementation increments it as a revision counter, but it is not the active concurrency-control mechanism: updates do not use a condition such as `WHERE account_id = :accountId AND version = :expectedVersion` and do not retry transactions after version conflicts.
+
+A full optimistic-locking implementation was intentionally omitted because of the exercise time limit. Withdrawals would require retrying the complete transaction after a conflict, while transfers would additionally need to coordinate conflicts involving two account rows without breaking idempotency or atomicity. Pessimistic locking provides simpler and deterministic behavior for the expected recruitment-scale workload.
+
+The trade-off is reduced throughput when many concurrent operations target the same account, because those operations are serialized. A future implementation could activate optimistic locking by using conditional version updates, verifying the affected-row count and safely retrying the complete transaction on conflict.
+
+### Spring Data R2DBC instead of Hibernate ORM
+
+The application uses Spring WebFlux, Netty and Spring Data R2DBC to keep request processing and database access non-blocking. Classic Hibernate ORM/JPA relies on blocking JDBC, so using it would conflict with the selected reactive architecture or require isolating blocking database calls on dedicated threads.
+
+Hibernate does support pessimistic locking, including the equivalent of `SELECT ... FOR UPDATE`. It was therefore not omitted because of a locking limitation. Direct SQL through R2DBC was selected primarily to remain within the non-blocking stack; it also provides explicit control over transaction boundaries, row-level locks and the deterministic order in which transfer accounts are locked.
+
+Hibernate Reactive was not introduced because it would add another persistence integration model and additional setup complexity for limited benefit in this time-constrained exercise. If the application used Spring MVC and blocking JDBC instead of WebFlux and R2DBC, Hibernate ORM would be a reasonable alternative.
+
 ### Shared database
 
 The services use one shared PostgreSQL database. In a production microservices architecture, each service would normally own its data and communicate through APIs or events. We chose a shared database because of the time limit of the exercise and because account status, balances, operation history and the outbox must be updated consistently.
@@ -446,6 +464,8 @@ These trade-offs prioritize a correct and demonstrable financial core over produ
 ## Operational conventions
 
 - The implementation is written in Kotlin on Java 25.
+- Application code uses Kotlin coroutines (`suspend`) over non-blocking Spring WebFlux, Netty and R2DBC. Reactor is retained only as an internal framework bridge.
+- Reactive transaction boundaries are expressed with `TransactionalOperator.executeAndAwait`; all account locks and financial writes remain on the same R2DBC transaction context.
 - A dedicated `db-migrations` Docker Compose service applies Liquibase changesets before application services start. Domain-model changes must be accompanied by new Liquibase changesets.
 - Configuration is supplied through environment variables; secrets are not committed.
 - API and event timestamps use ISO-8601 in UTC.

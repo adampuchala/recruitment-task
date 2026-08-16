@@ -3,16 +3,17 @@ package com.adampuchala.bank.audit.adapter.out
 
 import com.adampuchala.bank.audit.domain.AuditRepository
 import com.adampuchala.bank.contracts.FinancialOperationCompleted
+import org.intellij.lang.annotations.Language
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.stereotype.Repository
-import reactor.core.publisher.Mono
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
 
 @Repository
 class PostgresAuditRepository(private val databaseClient: DatabaseClient) : AuditRepository {
-    override fun insertIfAbsent(event: FinancialOperationCompleted): Mono<Boolean> {
+    override suspend fun insertIfAbsent(event: FinancialOperationCompleted): Boolean {
         var spec = databaseClient.sql(
             """INSERT INTO financial_operations_audit_events
                (event_id, operation_id, from_account_id, to_account_id, amount, created_at)
@@ -24,7 +25,7 @@ class PostgresAuditRepository(private val databaseClient: DatabaseClient) : Audi
             .bind("createdAt", OffsetDateTime.ofInstant(event.occurredAt, ZoneOffset.UTC))
         spec = spec.bindNullable("fromId", event.fromAccountId, UUID::class.java)
             .bindNullable("toId", event.toAccountId, UUID::class.java)
-        return spec.fetch().rowsUpdated().map { it == 1L }
+        return spec.fetch().awaitRowsUpdated() == 1L
     }
 
     private fun <T : Any> DatabaseClient.GenericExecuteSpec.bindNullable(name: String, value: T?, type: Class<T>): DatabaseClient.GenericExecuteSpec =

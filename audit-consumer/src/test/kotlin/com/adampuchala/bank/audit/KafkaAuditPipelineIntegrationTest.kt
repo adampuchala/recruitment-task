@@ -3,6 +3,7 @@ package com.adampuchala.bank.audit
 
 import com.adampuchala.bank.audit.adapter.out.PostgresAuditRepository
 import com.adampuchala.bank.audit.application.AuditEventConsumer
+import com.adampuchala.bank.audit.application.TransactionalAuditEventHandler
 import com.adampuchala.bank.contracts.FinancialOperationCompleted
 import com.adampuchala.bank.contracts.FinancialOperationType
 import com.adampuchala.bank.outbox.adapter.out.PostgresOutboxRepository
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import io.r2dbc.spi.ConnectionFactories
+import kotlinx.coroutines.runBlocking
 import liquibase.Liquibase
 import liquibase.database.DatabaseFactory
 import liquibase.database.jvm.JdbcConnection
@@ -29,6 +31,8 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.r2dbc.connection.R2dbcTransactionManager
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.r2dbc.core.awaitOne
+import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.transaction.reactive.TransactionalOperator
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.PostgreSQLContainer
@@ -77,7 +81,10 @@ class KafkaAuditPipelineIntegrationTest {
             .registerModule(KotlinModule.Builder().build())
             .registerModule(JavaTimeModule())
         kafkaTemplate = KafkaTemplate(DefaultKafkaProducerFactory(producerProperties()))
-        auditConsumer = AuditEventConsumer(PostgresAuditRepository(databaseClient), objectMapper, transaction)
+        auditConsumer = AuditEventConsumer(
+            TransactionalAuditEventHandler(PostgresAuditRepository(databaseClient), transaction),
+            objectMapper,
+        )
 
         AdminClient.create(mapOf(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG to "localhost:$KAFKA_PORT")).use { admin ->
             admin.createTopics(listOf(NewTopic("financial-operations", 1, 1))).all().get()
@@ -85,7 +92,7 @@ class KafkaAuditPipelineIntegrationTest {
     }
 
     @Test
-    fun `should publish outbox through Redpanda and deduplicate audit replay`() {
+    fun `should publish outbox through Redpanda and deduplicate audit replay`() = runBlocking {
         val event = event()
         seedOutbox(event)
         val kafkaConsumer = KafkaConsumer<String, String>(consumerProperties())
@@ -100,13 +107,13 @@ class KafkaAuditPipelineIntegrationTest {
                 "financial-operations",
                 50,
             )
-            outboxPublisher.publishPending().block(Duration.ofSeconds(20))
+            outboxPublisher.publishPending()
 
             val firstPayload = receiveOne(consumer)
-            auditConsumer.consume(firstPayload).block(Duration.ofSeconds(10))
+            auditConsumer.consume(firstPayload)
             kafkaTemplate.send("financial-operations", event.operationId.toString(), firstPayload).get()
             val duplicatePayload = receiveOne(consumer)
-            auditConsumer.consume(duplicatePayload).block(Duration.ofSeconds(10))
+            auditConsumer.consume(duplicatePayload)
         }
 
         assertEquals("PROCESSED", stringValue("SELECT status FROM financial_operation_result_outbox WHERE event_id = '${event.eventId}'"))
@@ -122,25 +129,25 @@ class KafkaAuditPipelineIntegrationTest {
         error("Kafka event was not received before timeout")
     }
 
-    private fun seedOutbox(event: FinancialOperationCompleted) {
+    private suspend fun seedOutbox(event: FinancialOperationCompleted) {
         val accountId = event.toAccountId!!
         databaseClient.sql(
             """INSERT INTO user_accounts
                (account_id, first_name, last_name, balance, status, version, created_at, updated_at)
                VALUES (:accountId, 'Integration', 'Test', :amount, 'ACTIVE', 1, now(), now())""",
-        ).bind("accountId", accountId).bind("amount", event.amount).fetch().rowsUpdated().block(Duration.ofSeconds(10))
+        ).bind("accountId", accountId).bind("amount", event.amount).fetch().awaitRowsUpdated()
         databaseClient.sql(
             """INSERT INTO financial_operations
                (operation_id, type, from_account_id, to_account_id, amount, status, created_at)
                VALUES (:operationId, 'DEPOSIT', NULL, :accountId, :amount, 'SUCCESS', now())""",
         ).bind("operationId", event.operationId).bind("accountId", accountId).bind("amount", event.amount)
-            .fetch().rowsUpdated().block(Duration.ofSeconds(10))
+            .fetch().awaitRowsUpdated()
         databaseClient.sql(
             """INSERT INTO financial_operation_result_outbox
                (event_id, operation_id, payload, status, attempts, created_at)
                VALUES (:eventId, :operationId, CAST(:payload AS jsonb), 'PENDING', 0, now())""",
         ).bind("eventId", event.eventId).bind("operationId", event.operationId)
-            .bind("payload", objectMapper.writeValueAsString(event)).fetch().rowsUpdated().block(Duration.ofSeconds(10))
+            .bind("payload", objectMapper.writeValueAsString(event)).fetch().awaitRowsUpdated()
     }
 
     private fun event() = FinancialOperationCompleted(
@@ -168,11 +175,11 @@ class KafkaAuditPipelineIntegrationTest {
         put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer::class.java)
     }
 
-    private fun stringValue(sql: String): String = databaseClient.sql(sql)
-        .map { row, _ -> row.get(0, String::class.java)!! }.one().block(Duration.ofSeconds(10))!!
+    private suspend fun stringValue(sql: String): String = databaseClient.sql(sql)
+        .map { row, _ -> row.get(0, String::class.java)!! }.awaitOne()
 
-    private fun longValue(sql: String): Long = databaseClient.sql(sql)
-        .map { row, _ -> row.get(0, java.lang.Long::class.java)!!.toLong() }.one().block(Duration.ofSeconds(10))!!
+    private suspend fun longValue(sql: String): Long = databaseClient.sql(sql)
+        .map { row, _ -> row.get(0, java.lang.Long::class.java)!!.toLong() }.awaitOne()
 
     private fun migrate() {
         val repositoryRoot = File(System.getProperty("repo.root", "..")).canonicalFile

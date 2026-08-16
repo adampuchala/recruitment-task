@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import reactor.core.publisher.Mono
 import java.util.UUID
 
 data class CreateAccountRequest(
@@ -31,18 +30,20 @@ data class ChangeStatusRequest(val status: AccountStatus)
 @RequestMapping("/api/v1/accounts")
 class AccountController(private val service: AccountApplicationService) {
     @PostMapping
-    fun create(
+    suspend fun create(
         @RequestHeader("Idempotency-Key") idempotencyKey: UUID,
         @Valid @RequestBody request: CreateAccountRequest,
-    ): Mono<ResponseEntity<AccountView>> = service.create(idempotencyKey, request.firstName, request.lastName)
-        .map { ResponseEntity.status(if (it.replay) HttpStatus.OK else HttpStatus.CREATED).body(it.account) }
+    ): ResponseEntity<AccountView> {
+        val result = service.create(idempotencyKey, request.firstName, request.lastName)
+        return ResponseEntity.status(if (result.replay) HttpStatus.OK else HttpStatus.CREATED).body(result.account)
+    }
 
     @GetMapping("/{accountId}")
-    fun get(@PathVariable accountId: UUID): Mono<AccountView> = service.get(accountId)
+    suspend fun get(@PathVariable accountId: UUID): AccountView = service.get(accountId)
 
     @PutMapping("/{accountId}/status")
-    fun changeStatus(
+    suspend fun changeStatus(
         @PathVariable accountId: UUID,
         @Valid @RequestBody request: ChangeStatusRequest,
-    ): Mono<AccountView> = service.changeStatus(accountId, request.status)
+    ): AccountView = service.changeStatus(accountId, request.status)
 }

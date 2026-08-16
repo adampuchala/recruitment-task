@@ -5,13 +5,14 @@ import com.adampuchala.bank.financial.adapter.out.PostgresFinancialRepository
 import com.adampuchala.bank.financial.application.CommandResult
 import com.adampuchala.bank.financial.application.FinancialApplicationService
 import com.adampuchala.bank.financial.domain.FinancialRepository
-import com.adampuchala.bank.financial.domain.FinancialIdempotencyRecord
-import com.adampuchala.bank.financial.domain.FinancialOperation
-import com.adampuchala.bank.financial.domain.LockedAccount
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import io.r2dbc.spi.ConnectionFactories
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 import liquibase.Liquibase
 import liquibase.database.DatabaseFactory
 import liquibase.database.jvm.JdbcConnection
@@ -22,20 +23,19 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.r2dbc.connection.R2dbcTransactionManager
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.r2dbc.core.awaitOne
+import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.transaction.reactive.TransactionalOperator
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
-import reactor.test.StepVerifier
 import java.io.File
 import java.math.BigDecimal
 import java.sql.DriverManager
-import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 @Testcontainers
@@ -69,21 +69,22 @@ class FinancialConsistencyIntegrationTest {
     }
 
     @BeforeEach
-    fun prepareDatabase() {
+    fun prepareDatabase() = runBlocking {
         databaseClient.sql(
             """TRUNCATE financial_operations_audit_events, financial_operation_result_outbox,
                financial_operations_idempotency_store, financial_operations,
                create_account_idempotency_store, user_accounts CASCADE""",
-        ).fetch().rowsUpdated().block(Duration.ofSeconds(10))
+        ).fetch().awaitRowsUpdated()
+        Unit
     }
 
     @Test
-    fun `should update balance history idempotency and outbox atomically`() {
+    fun `should update balance history idempotency and outbox atomically`() = runBlocking {
         val accountId = insertAccount(BigDecimal("100.0000"))
         val key = UUID.randomUUID()
 
-        val first = service.withdrawal(key, accountId, BigDecimal("25.0000"), "cash").block(Duration.ofSeconds(10))
-        val replay = service.withdrawal(key, accountId, BigDecimal("25.0000"), "cash").block(Duration.ofSeconds(10))
+        val first = service.withdrawal(key, accountId, BigDecimal("25.0000"), "cash")
+        val replay = service.withdrawal(key, accountId, BigDecimal("25.0000"), "cash")
 
         assertIs<CommandResult.Accepted>(first)
         assertIs<CommandResult.Accepted>(replay)
@@ -95,13 +96,14 @@ class FinancialConsistencyIntegrationTest {
     }
 
     @Test
-    fun `should prevent negative balance during concurrent withdrawals`() {
+    fun `should prevent negative balance during concurrent withdrawals`() = runBlocking {
         val accountId = insertAccount(BigDecimal("100.0000"))
 
-        val results = Flux.range(0, 20)
-            .flatMap({ service.withdrawal(UUID.randomUUID(), accountId, BigDecimal("10.0000"), null) }, 20)
-            .collectList()
-            .block(Duration.ofSeconds(30))!!
+        val results = coroutineScope {
+            (0 until 20).map {
+                async { service.withdrawal(UUID.randomUUID(), accountId, BigDecimal("10.0000"), null) }
+            }.awaitAll()
+        }
 
         assertEquals(10, results.count { it is CommandResult.Accepted })
         assertEquals(10, results.count { it is CommandResult.Rejected })
@@ -111,14 +113,15 @@ class FinancialConsistencyIntegrationTest {
     }
 
     @Test
-    fun `should serialize concurrent repeated idempotency key`() {
+    fun `should serialize concurrent repeated idempotency key`() = runBlocking {
         val accountId = insertAccount(BigDecimal.ZERO.setScale(4))
         val key = UUID.randomUUID()
 
-        val results = Flux.range(0, 8)
-            .flatMap({ service.deposit(key, accountId, BigDecimal("5.0000"), "same request") }, 8)
-            .collectList()
-            .block(Duration.ofSeconds(30))!!
+        val results = coroutineScope {
+            (0 until 8).map {
+                async { service.deposit(key, accountId, BigDecimal("5.0000"), "same request") }
+            }.awaitAll()
+        }
 
         assertEquals(8, results.size)
         assertEquals(1, results.count { it is CommandResult.Accepted && !it.replay })
@@ -128,17 +131,18 @@ class FinancialConsistencyIntegrationTest {
     }
 
     @Test
-    fun `should avoid deadlock and preserve total during opposite concurrent transfers`() {
+    fun `should avoid deadlock and preserve total during opposite concurrent transfers`() = runBlocking {
         val firstAccount = insertAccount(BigDecimal("100.0000"))
         val secondAccount = insertAccount(BigDecimal("100.0000"))
 
-        val commands = (0 until 10).flatMap {
-            listOf(
-                service.transfer(UUID.randomUUID(), firstAccount, secondAccount, BigDecimal("1.0000"), null),
-                service.transfer(UUID.randomUUID(), secondAccount, firstAccount, BigDecimal("1.0000"), null),
-            )
+        val results = coroutineScope {
+            (0 until 10).flatMap {
+                listOf(
+                    async { service.transfer(UUID.randomUUID(), firstAccount, secondAccount, BigDecimal("1.0000"), null) },
+                    async { service.transfer(UUID.randomUUID(), secondAccount, firstAccount, BigDecimal("1.0000"), null) },
+                )
+            }.awaitAll()
         }
-        val results = Flux.fromIterable(commands).flatMap({ it }, 20).collectList().block(Duration.ofSeconds(30))!!
 
         assertEquals(20, results.count { it is CommandResult.Accepted })
         assertEquals(BigDecimal("100.0000"), balance(firstAccount))
@@ -147,14 +151,15 @@ class FinancialConsistencyIntegrationTest {
     }
 
     @Test
-    fun `should roll back balance operation idempotency and outbox on atomic failure`() {
+    fun `should roll back balance operation idempotency and outbox on atomic failure`() = runBlocking {
         val accountId = insertAccount(BigDecimal("50.0000"))
         val failingRepository = FailingOutboxRepository(repository)
         val failingService = FinancialApplicationService(failingRepository, objectMapper, transactionalOperator)
 
-        StepVerifier.create(failingService.deposit(UUID.randomUUID(), accountId, BigDecimal("10.0000"), null))
-            .expectErrorMessage("simulated outbox failure")
-            .verify(Duration.ofSeconds(10))
+        val exception = assertFailsWith<IllegalStateException> {
+            failingService.deposit(UUID.randomUUID(), accountId, BigDecimal("10.0000"), null)
+        }
+        assertEquals("simulated outbox failure", exception.message)
 
         assertEquals(BigDecimal("50.0000"), balance(accountId))
         assertEquals(0L, count("financial_operations"))
@@ -176,31 +181,31 @@ class FinancialConsistencyIntegrationTest {
         }
     }
 
-    private fun insertAccount(initialBalance: BigDecimal): UUID {
+    private suspend fun insertAccount(initialBalance: BigDecimal): UUID {
         val accountId = UUID.randomUUID()
         databaseClient.sql(
             """INSERT INTO user_accounts
                (account_id, first_name, last_name, balance, status, version, created_at, updated_at)
                VALUES (:id, 'Test', 'Account', :balance, 'ACTIVE', 0, now(), now())""",
-        ).bind("id", accountId).bind("balance", initialBalance).fetch().rowsUpdated().block(Duration.ofSeconds(10))
+        ).bind("id", accountId).bind("balance", initialBalance).fetch().awaitRowsUpdated()
         return accountId
     }
 
-    private fun balance(accountId: UUID): BigDecimal = databaseClient.sql(
+    private suspend fun balance(accountId: UUID): BigDecimal = databaseClient.sql(
         "SELECT balance FROM user_accounts WHERE account_id = :id",
-    ).bind("id", accountId).map { row, _ -> row.get("balance", BigDecimal::class.java)!! }
-        .one().block(Duration.ofSeconds(10))!!
+    ).bind("id", accountId).map { row, _ -> row.get("balance", BigDecimal::class.java)!! }.awaitOne()
 
-    private fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
-        .map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }
-        .one().block(Duration.ofSeconds(10))!!
+    private suspend fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
+        .map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.awaitOne()
 
     private class FailingOutboxRepository(private val delegate: FinancialRepository) : FinancialRepository by delegate {
-        override fun insertOutbox(
+        override suspend fun insertOutbox(
             eventId: UUID,
             operationId: UUID,
             payload: String,
             createdAt: Instant,
-        ): Mono<Void> = Mono.error(IllegalStateException("simulated outbox failure"))
+        ) {
+            throw IllegalStateException("simulated outbox failure")
+        }
     }
 }

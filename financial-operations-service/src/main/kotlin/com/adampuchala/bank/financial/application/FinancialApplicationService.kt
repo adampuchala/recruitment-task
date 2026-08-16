@@ -11,7 +11,7 @@ import com.adampuchala.bank.financial.domain.LockedAccount
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.stereotype.Service
 import org.springframework.transaction.reactive.TransactionalOperator
-import reactor.core.publisher.Mono
+import org.springframework.transaction.reactive.executeAndAwait
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -57,70 +57,83 @@ class FinancialApplicationService(
     private val transactionalOperator: TransactionalOperator,
     private val clock: Clock = Clock.systemUTC(),
 ) {
-    fun deposit(key: UUID, accountId: UUID, amount: BigDecimal, description: String?): Mono<CommandResult> {
+    suspend fun deposit(key: UUID, accountId: UUID, amount: BigDecimal, description: String?): CommandResult {
         guardRequest(amount, description)
         return executeSingle(key, FinancialOperationType.DEPOSIT, accountId, amount, description)
     }
 
-    fun withdrawal(key: UUID, accountId: UUID, amount: BigDecimal, description: String?): Mono<CommandResult> {
+    suspend fun withdrawal(key: UUID, accountId: UUID, amount: BigDecimal, description: String?): CommandResult {
         guardRequest(amount, description)
         return executeSingle(key, FinancialOperationType.WITHDRAWAL, accountId, amount, description)
     }
 
-    fun transfer(key: UUID, fromId: UUID, toId: UUID, amount: BigDecimal, description: String?): Mono<CommandResult> {
+    suspend fun transfer(key: UUID, fromId: UUID, toId: UUID, amount: BigDecimal, description: String?): CommandResult {
         guardRequest(amount, description)
         val hash = requestHash(FinancialOperationType.TRANSFER, fromId, toId, amount, description)
-        val work = acquire(key, hash).flatMap { acquisition ->
-            if (acquisition is IdempotencyAcquisition.Existing) Mono.just(acquisition.result)
-            else if (fromId == toId) reject(key, "INVALID_TRANSFER", "Source and destination accounts must differ")
-            else {
-                val sorted = listOf(fromId, toId).sortedBy(UUID::toString)
-                repository.lockAccount(sorted[0]).switchIfEmpty(Mono.error(AccountNotFoundException()))
-                    .flatMap { first -> repository.lockAccount(sorted[1]).switchIfEmpty(Mono.error(AccountNotFoundException())).map { first to it } }
-                    .flatMap { (first, second) ->
+        return transactionalOperator.executeAndAwait {
+            when (val acquisition = acquire(key, hash)) {
+                is IdempotencyAcquisition.Existing -> acquisition.result
+                IdempotencyAcquisition.NewRequest -> {
+                    if (fromId == toId) {
+                        reject(key, "INVALID_TRANSFER", "Source and destination accounts must differ")
+                    } else {
+                        val sorted = listOf(fromId, toId).sortedBy(UUID::toString) //avoid deadlock when locking accounts in different order
+                        val first = repository.lockAccount(sorted[0]) ?: throw AccountNotFoundException()
+                        val second = repository.lockAccount(sorted[1]) ?: throw AccountNotFoundException()
                         val from = if (first.accountId == fromId) first else second
                         val to = if (first.accountId == toId) first else second
-                        validateActive(from)?.let { return@flatMap reject(key, it.code, it.message) }
-                        validateActive(to)?.let { return@flatMap reject(key, it.code, it.message) }
-                        if (from.balance < amount) return@flatMap reject(key, "INSUFFICIENT_FUNDS", "The account balance is insufficient for this operation")
-                        persistSuccess(key, FinancialOperationType.TRANSFER, fromId, toId, amount, description, null,
-                            repository.updateBalance(fromId, from.balance.subtract(amount), clock.instant())
-                                .then(repository.updateBalance(toId, to.balance.add(amount), clock.instant())))
+                        validateActive(from)?.let { return@executeAndAwait reject(key, it.code, it.message) }
+                        validateActive(to)?.let { return@executeAndAwait reject(key, it.code, it.message) }
+                        if (from.balance < amount) {
+                            reject(key, "INSUFFICIENT_FUNDS", "The account balance is insufficient for this operation")
+                        } else {
+                            persistSuccess(
+                                key, FinancialOperationType.TRANSFER, fromId, toId, amount, description, null,
+                            ) {
+                                repository.updateBalance(fromId, from.balance.subtract(amount), clock.instant())
+                                repository.updateBalance(toId, to.balance.add(amount), clock.instant())
+                            }
+                        }
                     }
+                }
             }
         }
-        return transactionalOperator.transactional(work)
     }
 
-    fun get(operationId: UUID): Mono<OperationResponse> = repository.findOperation(operationId)
-        .switchIfEmpty(Mono.error(OperationNotFoundException())).map { it.toResponse(null) }
+    suspend fun get(operationId: UUID): OperationResponse = (repository.findOperation(operationId)
+        ?: throw OperationNotFoundException()).toResponse(null)
 
-    fun history(accountId: UUID, page: Int, size: Int): Mono<OperationPage> {
+    suspend fun history(accountId: UUID, page: Int, size: Int): OperationPage {
         val safePage = page.coerceAtLeast(0)
         val safeSize = size.coerceIn(1, 100)
-        return repository.findByAccount(accountId, safeSize, safePage.toLong() * safeSize).collectList()
-            .zipWith(repository.countByAccount(accountId))
-            .map { OperationPage(it.t1.map { operation -> operation.toResponse(null) }, safePage, safeSize, it.t2) }
+        val operations = repository.findByAccount(accountId, safeSize, safePage.toLong() * safeSize)
+        val total = repository.countByAccount(accountId)
+        return OperationPage(operations.map { it.toResponse(null) }, safePage, safeSize, total)
     }
 
-    private fun executeSingle(key: UUID, type: FinancialOperationType, accountId: UUID, amount: BigDecimal, description: String?): Mono<CommandResult> {
+    private suspend fun executeSingle(key: UUID, type: FinancialOperationType, accountId: UUID, amount: BigDecimal, description: String?): CommandResult =
+        transactionalOperator.executeAndAwait {
         val fromId = if (type == FinancialOperationType.WITHDRAWAL) accountId else null
         val toId = if (type == FinancialOperationType.DEPOSIT) accountId else null
         val hash = requestHash(type, fromId, toId, amount, description)
-        val work = acquire(key, hash).flatMap { acquisition ->
-            if (acquisition is IdempotencyAcquisition.Existing) Mono.just(acquisition.result)
-            else repository.lockAccount(accountId).switchIfEmpty(Mono.error(AccountNotFoundException())).flatMap { account ->
-                validateActive(account)?.let { return@flatMap reject(key, it.code, it.message) }
+        when (val acquisition = acquire(key, hash)) {
+            is IdempotencyAcquisition.Existing -> acquisition.result
+            IdempotencyAcquisition.NewRequest -> {
+                val account = repository.lockAccount(accountId) ?: throw AccountNotFoundException()
+                validateActive(account)?.let { return@executeAndAwait reject(key, it.code, it.message) }
                 val newBalance = if (type == FinancialOperationType.DEPOSIT) account.balance.add(amount) else account.balance.subtract(amount)
-                if (newBalance.signum() < 0) return@flatMap reject(key, "INSUFFICIENT_FUNDS", "The account balance is insufficient for this operation")
-                persistSuccess(key, type, fromId, toId, amount, description, newBalance,
-                    repository.updateBalance(accountId, newBalance, clock.instant()))
+                if (newBalance.signum() < 0) {
+                    reject(key, "INSUFFICIENT_FUNDS", "The account balance is insufficient for this operation")
+                } else {
+                    persistSuccess(key, type, fromId, toId, amount, description, newBalance) {
+                        repository.updateBalance(accountId, newBalance, clock.instant())
+                    }
+                }
             }
         }
-        return transactionalOperator.transactional(work)
     }
 
-    private fun persistSuccess(
+    private suspend fun persistSuccess(
         key: UUID,
         type: FinancialOperationType,
         fromId: UUID?,
@@ -128,34 +141,38 @@ class FinancialApplicationService(
         amount: BigDecimal,
         description: String?,
         balanceAfter: BigDecimal?,
-        balanceUpdates: Mono<Void>,
-    ): Mono<CommandResult> {
+        balanceUpdates: suspend () -> Unit,
+    ): CommandResult {
         val now = clock.instant()
         val operation = FinancialOperation(UUID.randomUUID(), type, fromId, toId, amount, "SUCCESS", description?.trim(), now)
         val event = FinancialOperationCompleted(UUID.randomUUID(), operationId = operation.operationId, operationType = type,
             fromAccountId = fromId, toAccountId = toId, amount = amount, occurredAt = now)
         val response = operation.toResponse(balanceAfter)
-        return balanceUpdates.then(repository.insertOperation(operation))
-            .then(repository.insertOutbox(event.eventId, operation.operationId, objectMapper.writeValueAsString(event), now))
-            .then(repository.completeSuccess(key, operation.operationId, objectMapper.writeValueAsString(response)))
-            .thenReturn(CommandResult.Accepted(response))
+        balanceUpdates()
+        repository.insertOperation(operation)
+        repository.insertOutbox(event.eventId, operation.operationId, objectMapper.writeValueAsString(event), now)
+        repository.completeSuccess(key, operation.operationId, objectMapper.writeValueAsString(response))
+        return CommandResult.Accepted(response)
     }
 
-    private fun acquire(key: UUID, hash: String): Mono<IdempotencyAcquisition> = repository.tryInsertIdempotency(key, hash).flatMap { inserted ->
-        if (inserted) Mono.just(IdempotencyAcquisition.NewRequest)
-        else repository.findIdempotency(key).flatMap { record ->
-            if (record.requestHash != hash) return@flatMap Mono.error(IdempotencyConflictException())
-            when {
-                record.status == "SUCCESS" && record.responsePayload != null -> Mono.just(IdempotencyAcquisition.Existing(CommandResult.Accepted(objectMapper.readValue(record.responsePayload, OperationResponse::class.java), true)))
-                record.status == "ERROR" && record.responsePayload != null -> Mono.just(IdempotencyAcquisition.Existing(CommandResult.Rejected(objectMapper.readValue(record.responsePayload, StoredBusinessError::class.java), true)))
-                else -> Mono.error(IllegalStateException("Idempotency request is incomplete"))
-            }
+    private suspend fun acquire(key: UUID, hash: String): IdempotencyAcquisition {
+        if (repository.tryInsertIdempotency(key, hash)) return IdempotencyAcquisition.NewRequest
+        val record = repository.findIdempotency(key)
+            ?: throw IllegalStateException("Idempotency request is incomplete")
+        if (record.requestHash != hash) throw IdempotencyConflictException()
+        return when {
+            record.status == "SUCCESS" && record.responsePayload != null ->
+                IdempotencyAcquisition.Existing(CommandResult.Accepted(objectMapper.readValue(record.responsePayload, OperationResponse::class.java), true))
+            record.status == "ERROR" && record.responsePayload != null ->
+                IdempotencyAcquisition.Existing(CommandResult.Rejected(objectMapper.readValue(record.responsePayload, StoredBusinessError::class.java), true))
+            else -> throw IllegalStateException("Idempotency request is incomplete")
         }
     }
 
-    private fun reject(key: UUID, code: String, message: String): Mono<CommandResult> {
+    private suspend fun reject(key: UUID, code: String, message: String): CommandResult {
         val error = StoredBusinessError(code, message)
-        return repository.completeError(key, objectMapper.writeValueAsString(error)).thenReturn(CommandResult.Rejected(error))
+        repository.completeError(key, objectMapper.writeValueAsString(error))
+        return CommandResult.Rejected(error)
     }
 
     private fun validateActive(account: LockedAccount): StoredBusinessError? = when (account.status) {

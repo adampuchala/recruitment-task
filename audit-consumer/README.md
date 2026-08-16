@@ -4,6 +4,8 @@ Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
 
 Consumes successful financial-operation events and writes one audit row per `eventId`. Transient failures retry three times with one-second backoff, then publish to `financial-operations.DLT`.
 
+The Kafka adapter and transactional audit handler use Kotlin suspending functions. The listener completes only after the R2DBC transaction finishes, so Kafka acknowledgement and retry behavior remain intact.
+
 The consumer has no business API. It exposes Actuator health on port `8084`; `openapi.yaml` documents that endpoint. Configure it with the database variables plus `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC`, `KAFKA_CONSUMER_GROUP` and `SERVER_PORT`. From the repository root, run `./gradlew :audit-consumer:build` or start it with the complete Docker Compose environment after the root build.
 
 Inspect DLT messages with:

@@ -9,9 +9,12 @@ import com.adampuchala.bank.financial.domain.FinancialRepository
 import com.adampuchala.bank.financial.domain.LockedAccount
 import io.r2dbc.spi.Row
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.r2dbc.core.awaitOne
+import org.springframework.r2dbc.core.awaitOneOrNull
+import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.stereotype.Repository
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.reactive.asFlow
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -20,13 +23,13 @@ import java.util.UUID
 
 @Repository
 class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : FinancialRepository {
-    override fun tryInsertIdempotency(key: UUID, hash: String): Mono<Boolean> = databaseClient.sql(
+    override suspend fun tryInsertIdempotency(key: UUID, hash: String): Boolean = databaseClient.sql(
         """INSERT INTO financial_operations_idempotency_store
            (idempotency_key, request_hash, status, created_at)
            VALUES (:key, :hash, 'PENDING', now()) ON CONFLICT DO NOTHING""",
-    ).bind("key", key).bind("hash", hash).fetch().rowsUpdated().map { it == 1L }
+    ).bind("key", key).bind("hash", hash).fetch().awaitRowsUpdated() == 1L
 
-    override fun findIdempotency(key: UUID): Mono<FinancialIdempotencyRecord> = databaseClient.sql(
+    override suspend fun findIdempotency(key: UUID): FinancialIdempotencyRecord? = databaseClient.sql(
         """SELECT request_hash, response_payload::text AS response_payload, status
            FROM financial_operations_idempotency_store WHERE idempotency_key = :key""",
     ).bind("key", key).map { row, _ ->
@@ -35,21 +38,25 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
             row.get("response_payload", String::class.java),
             row.get("status", String::class.java)!!,
         )
-    }.one()
+    }.awaitOneOrNull()
 
-    override fun completeSuccess(key: UUID, operationId: UUID, payload: String): Mono<Void> = databaseClient.sql(
+    override suspend fun completeSuccess(key: UUID, operationId: UUID, payload: String) {
+        databaseClient.sql(
         """UPDATE financial_operations_idempotency_store
            SET operation_id = :operationId, response_payload = CAST(:payload AS jsonb), status = 'SUCCESS'
            WHERE idempotency_key = :key""",
-    ).bind("operationId", operationId).bind("payload", payload).bind("key", key).fetch().rowsUpdated().then()
+        ).bind("operationId", operationId).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated()
+    }
 
-    override fun completeError(key: UUID, payload: String): Mono<Void> = databaseClient.sql(
+    override suspend fun completeError(key: UUID, payload: String) {
+        databaseClient.sql(
         """UPDATE financial_operations_idempotency_store
            SET response_payload = CAST(:payload AS jsonb), status = 'ERROR'
            WHERE idempotency_key = :key""",
-    ).bind("payload", payload).bind("key", key).fetch().rowsUpdated().then()
+        ).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated()
+    }
 
-    override fun lockAccount(accountId: UUID): Mono<LockedAccount> = databaseClient.sql(
+    override suspend fun lockAccount(accountId: UUID): LockedAccount? = databaseClient.sql(
         """SELECT account_id, balance, status, version FROM user_accounts
            WHERE account_id = :accountId FOR UPDATE""",
     ).bind("accountId", accountId).map { row, _ ->
@@ -59,16 +66,18 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
             AccountStatus.valueOf(row.get("status", String::class.java)!!),
             row.get("version", java.lang.Long::class.java)!!.toLong(),
         )
-    }.one()
+    }.awaitOneOrNull()
 
-    override fun updateBalance(accountId: UUID, balance: BigDecimal, updatedAt: Instant): Mono<Void> = databaseClient.sql(
-        """UPDATE user_accounts SET balance = :balance, version = version + 1, updated_at = :updatedAt
+    override suspend fun updateBalance(accountId: UUID, balance: BigDecimal, updatedAt: Instant) {
+        databaseClient.sql(
+        """UPDATE user_accounts SET balance = :balance, version = version + 1, updated_at = :updatedAt 
            WHERE account_id = :accountId""",
     ).bind("balance", balance)
         .bind("updatedAt", OffsetDateTime.ofInstant(updatedAt, ZoneOffset.UTC))
-        .bind("accountId", accountId).fetch().rowsUpdated().then()
+        .bind("accountId", accountId).fetch().awaitRowsUpdated()
+    }
 
-    override fun insertOperation(operation: FinancialOperation): Mono<Void> {
+    override suspend fun insertOperation(operation: FinancialOperation) {
         var spec = databaseClient.sql(
             """INSERT INTO financial_operations
                (operation_id, type, from_account_id, to_account_id, amount, status, description, created_at)
@@ -81,31 +90,33 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
         spec = spec.bindNullable("fromId", operation.fromAccountId, UUID::class.java)
             .bindNullable("toId", operation.toAccountId, UUID::class.java)
             .bindNullable("description", operation.description, String::class.java)
-        return spec.fetch().rowsUpdated().then()
+        spec.fetch().awaitRowsUpdated()
     }
 
-    override fun insertOutbox(eventId: UUID, operationId: UUID, payload: String, createdAt: Instant): Mono<Void> = databaseClient.sql(
+    override suspend fun insertOutbox(eventId: UUID, operationId: UUID, payload: String, createdAt: Instant) {
+        databaseClient.sql(
         """INSERT INTO financial_operation_result_outbox
            (event_id, operation_id, payload, status, attempts, created_at)
            VALUES (:eventId, :operationId, CAST(:payload AS jsonb), 'PENDING', 0, :createdAt)""",
     ).bind("eventId", eventId).bind("operationId", operationId).bind("payload", payload)
-        .bind("createdAt", OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC)).fetch().rowsUpdated().then()
+        .bind("createdAt", OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC)).fetch().awaitRowsUpdated()
+    }
 
-    override fun findOperation(operationId: UUID): Mono<FinancialOperation> = databaseClient.sql(
+    override suspend fun findOperation(operationId: UUID): FinancialOperation? = databaseClient.sql(
         """SELECT operation_id, type, from_account_id, to_account_id, amount, status, description, created_at
            FROM financial_operations WHERE operation_id = :operationId""",
-    ).bind("operationId", operationId).map(::mapOperation).one()
+    ).bind("operationId", operationId).map(::mapOperation).awaitOneOrNull()
 
-    override fun findByAccount(accountId: UUID, limit: Int, offset: Long): Flux<FinancialOperation> = databaseClient.sql(
+    override suspend fun findByAccount(accountId: UUID, limit: Int, offset: Long): List<FinancialOperation> = databaseClient.sql(
         """SELECT operation_id, type, from_account_id, to_account_id, amount, status, description, created_at
            FROM financial_operations
            WHERE from_account_id = :accountId OR to_account_id = :accountId
            ORDER BY created_at DESC, operation_id DESC LIMIT :limit OFFSET :offset""",
-    ).bind("accountId", accountId).bind("limit", limit).bind("offset", offset).map(::mapOperation).all()
+    ).bind("accountId", accountId).bind("limit", limit).bind("offset", offset).map(::mapOperation).all().asFlow().toList()
 
-    override fun countByAccount(accountId: UUID): Mono<Long> = databaseClient.sql(
+    override suspend fun countByAccount(accountId: UUID): Long = databaseClient.sql(
         "SELECT COUNT(*) AS count FROM financial_operations WHERE from_account_id = :accountId OR to_account_id = :accountId",
-    ).bind("accountId", accountId).map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.one()
+    ).bind("accountId", accountId).map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.awaitOne()
 
     private fun mapOperation(row: Row, metadata: io.r2dbc.spi.RowMetadata) = FinancialOperation(
         row.get("operation_id", UUID::class.java)!!,

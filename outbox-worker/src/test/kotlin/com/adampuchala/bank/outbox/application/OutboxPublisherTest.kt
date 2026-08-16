@@ -15,9 +15,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.support.SendResult
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
-import reactor.test.StepVerifier
+import kotlinx.coroutines.test.runTest
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 
@@ -26,33 +24,31 @@ class OutboxPublisherTest {
     private val kafkaTemplate = mock<KafkaTemplate<String, String>>()
 
     @Test
-    fun `should mark acknowledged event as processed`() {
+    fun `should mark acknowledged event as processed`() = runTest {
         val event = event()
         val metadata = RecordMetadata(TopicPartition("financial-operations", 0), 0, 0, 0, 0, 0)
         val sendResult = SendResult(ProducerRecord("financial-operations", event.operationId.toString(), event.payload), metadata)
-        whenever(repository.findPending(50)).thenReturn(Flux.just(event))
+        whenever(repository.findPending(50)).thenReturn(listOf(event))
         whenever(kafkaTemplate.send("financial-operations", event.operationId.toString(), event.payload))
             .thenReturn(CompletableFuture.completedFuture(sendResult))
-        whenever(repository.markProcessed(eq(event.eventId), any())).thenReturn(Mono.empty())
+        whenever(repository.markProcessed(eq(event.eventId), any())).thenReturn(Unit)
 
-        StepVerifier.create(OutboxPublisher(repository, kafkaTemplate, "financial-operations", 50).publishPending())
-            .verifyComplete()
+        OutboxPublisher(repository, kafkaTemplate, "financial-operations", 50).publishPending()
 
         verify(repository).markProcessed(eq(event.eventId), any())
         verify(repository, never()).incrementAttempts(event.eventId)
     }
 
     @Test
-    fun `should increment attempts and leave pending after publication failure`() {
+    fun `should increment attempts and leave pending after publication failure`() = runTest {
         val event = event()
         val failure = CompletableFuture<SendResult<String, String>>()
         failure.completeExceptionally(IllegalStateException("broker unavailable"))
-        whenever(repository.findPending(50)).thenReturn(Flux.just(event))
+        whenever(repository.findPending(50)).thenReturn(listOf(event))
         whenever(kafkaTemplate.send("financial-operations", event.operationId.toString(), event.payload)).thenReturn(failure)
-        whenever(repository.incrementAttempts(event.eventId)).thenReturn(Mono.empty())
+        whenever(repository.incrementAttempts(event.eventId)).thenReturn(Unit)
 
-        StepVerifier.create(OutboxPublisher(repository, kafkaTemplate, "financial-operations", 50).publishPending())
-            .verifyComplete()
+        OutboxPublisher(repository, kafkaTemplate, "financial-operations", 50).publishPending()
 
         verify(repository).incrementAttempts(event.eventId)
         verify(repository, never()).markProcessed(eq(event.eventId), any())

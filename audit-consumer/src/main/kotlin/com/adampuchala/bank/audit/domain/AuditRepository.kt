@@ -2,8 +2,7 @@
 package com.adampuchala.bank.audit.domain
 
 import com.adampuchala.bank.contracts.FinancialOperationCompleted
-import reactor.core.publisher.Mono
 
 interface AuditRepository {
-    fun insertIfAbsent(event: FinancialOperationCompleted): Mono<Boolean>
+    suspend fun insertIfAbsent(event: FinancialOperationCompleted): Boolean
 }

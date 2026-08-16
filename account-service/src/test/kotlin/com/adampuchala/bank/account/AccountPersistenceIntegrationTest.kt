@@ -23,12 +23,16 @@ import org.springframework.transaction.reactive.TransactionalOperator
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import reactor.core.publisher.Flux
-import reactor.test.StepVerifier
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.runBlocking
+import org.springframework.r2dbc.core.awaitRowsUpdated
 import java.io.File
 import java.sql.DriverManager
-import java.time.Duration
 import java.util.UUID
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 
 @Testcontainers
@@ -59,19 +63,20 @@ class AccountPersistenceIntegrationTest {
     }
 
     @BeforeEach
-    fun cleanDatabase() {
+    fun cleanDatabase() = runBlocking {
         databaseClient.sql(
             """TRUNCATE financial_operations_audit_events, financial_operation_result_outbox,
                financial_operations_idempotency_store, financial_operations,
                create_account_idempotency_store, user_accounts CASCADE""",
-        ).fetch().rowsUpdated().block(Duration.ofSeconds(10))
+        ).fetch().awaitRowsUpdated()
+        Unit
     }
 
     @Test
-    fun `should create retrieve and change status`() {
-        val created = service.create(UUID.randomUUID(), "Ada", "Lovelace").block(Duration.ofSeconds(10))!!
-        val blocked = service.changeStatus(created.account.accountId, AccountStatus.BLOCKED).block(Duration.ofSeconds(10))!!
-        val retrieved = service.get(created.account.accountId).block(Duration.ofSeconds(10))!!
+    fun `should create retrieve and change status`() = runBlocking {
+        val created = service.create(UUID.randomUUID(), "Ada", "Lovelace")
+        val blocked = service.changeStatus(created.account.accountId, AccountStatus.BLOCKED)
+        val retrieved = service.get(created.account.accountId)
 
         assertEquals(AccountStatus.BLOCKED, blocked.status)
         assertEquals(blocked, retrieved)
@@ -79,12 +84,12 @@ class AccountPersistenceIntegrationTest {
     }
 
     @Test
-    fun `should create one account for concurrent repeated idempotency key`() {
+    fun `should create one account for concurrent repeated idempotency key`() = runBlocking {
         val key = UUID.randomUUID()
 
-        val results = Flux.range(0, 8)
-            .flatMap({ service.create(key, "Grace", "Hopper") }, 8)
-            .collectList().block(Duration.ofSeconds(30))!!
+        val results = coroutineScope {
+            (0 until 8).map { async { service.create(key, "Grace", "Hopper") } }.awaitAll()
+        }
 
         assertEquals(8, results.size)
         assertEquals(1, results.count { !it.replay })
@@ -94,13 +99,13 @@ class AccountPersistenceIntegrationTest {
     }
 
     @Test
-    fun `should reject same idempotency key with different account request`() {
+    fun `should reject same idempotency key with different account request`() = runBlocking {
         val key = UUID.randomUUID()
-        service.create(key, "First", "Person").block(Duration.ofSeconds(10))
+        service.create(key, "First", "Person")
 
-        StepVerifier.create(service.create(key, "Second", "Person"))
-            .expectError(IdempotencyConflictException::class.java)
-            .verify(Duration.ofSeconds(10))
+        assertFailsWith<IdempotencyConflictException> {
+            service.create(key, "Second", "Person")
+        }
 
         assertEquals(1L, count("user_accounts"))
     }
@@ -119,7 +124,7 @@ class AccountPersistenceIntegrationTest {
         }
     }
 
-    private fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
+    private suspend fun count(table: String): Long = databaseClient.sql("SELECT COUNT(*) AS count FROM $table")
         .map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }
-        .one().block(Duration.ofSeconds(10))!!
+        .one().awaitSingle()
 }

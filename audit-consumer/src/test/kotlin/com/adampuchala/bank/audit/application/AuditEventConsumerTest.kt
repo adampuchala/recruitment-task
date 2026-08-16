@@ -1,19 +1,13 @@
 // Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
 package com.adampuchala.bank.audit.application
 
-import com.adampuchala.bank.audit.domain.AuditRepository
 import com.adampuchala.bank.contracts.FinancialOperationCompleted
 import com.adampuchala.bank.contracts.FinancialOperationType
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.any
-import org.mockito.kotlin.mock
-import org.mockito.kotlin.whenever
-import org.springframework.transaction.reactive.TransactionalOperator
-import reactor.core.publisher.Mono
-import reactor.test.StepVerifier
+import kotlinx.coroutines.test.runTest
 import java.math.BigDecimal
 import java.time.Instant
 import java.util.UUID
@@ -26,35 +20,27 @@ class AuditEventConsumerTest {
         .registerModule(JavaTimeModule())
 
     @Test
-    fun `should ignore already processed audit event`() {
+    fun `should ignore already processed audit event`() = runTest {
         val eventIds = ConcurrentHashMap.newKeySet<UUID>()
-        val repository = object : AuditRepository {
-            override fun insertIfAbsent(event: FinancialOperationCompleted): Mono<Boolean> =
-                Mono.fromSupplier { eventIds.add(event.eventId) }
+        val handler = object : AuditEventHandler {
+            override suspend fun handle(event: FinancialOperationCompleted): Boolean = eventIds.add(event.eventId)
         }
-        val transaction = passThroughTransaction()
-        val consumer = AuditEventConsumer(repository, objectMapper, transaction)
+        val consumer = AuditEventConsumer(handler, objectMapper)
         val payload = objectMapper.writeValueAsString(event())
 
-        StepVerifier.create(consumer.consume(payload).then(consumer.consume(payload))).verifyComplete()
+        consumer.consume(payload)
+        consumer.consume(payload)
 
         assertEquals(1, eventIds.size)
     }
 
     @Test
-    fun `should propagate malformed event for retry and DLT handling`() {
-        val repository = mock<AuditRepository>()
-        val consumer = AuditEventConsumer(repository, objectMapper, passThroughTransaction())
+    fun `should propagate malformed event for retry and DLT handling`() = runTest {
+        val consumer = AuditEventConsumer(object : AuditEventHandler {
+            override suspend fun handle(event: FinancialOperationCompleted): Boolean = true
+        }, objectMapper)
 
-        StepVerifier.create(consumer.consume("{not-json"))
-            .expectError()
-            .verify()
-    }
-
-    private fun passThroughTransaction(): TransactionalOperator {
-        val transaction = mock<TransactionalOperator>()
-        whenever(transaction.transactional(any<Mono<Boolean>>())).thenAnswer { it.arguments[0] }
-        return transaction
+        kotlin.test.assertFailsWith<Exception> { consumer.consume("{not-json") }
     }
 
     private fun event() = FinancialOperationCompleted(

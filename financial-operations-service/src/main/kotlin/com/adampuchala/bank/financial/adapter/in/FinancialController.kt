@@ -19,7 +19,6 @@ import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
-import reactor.core.publisher.Mono
 import java.math.BigDecimal
 import java.time.Instant
 import java.util.UUID
@@ -42,23 +41,23 @@ data class ApiError(val code: String, val message: String, val timestamp: Instan
 @RequestMapping("/api/v1")
 class FinancialController(private val service: FinancialApplicationService) {
     @PostMapping("/accounts/{accountId}/deposits")
-    fun deposit(@PathVariable accountId: UUID, @RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: MoneyRequest) =
-        service.deposit(key, accountId, request.amount, request.description).map { toResponse(it, "/api/v1/accounts/$accountId/deposits") }
+    suspend fun deposit(@PathVariable accountId: UUID, @RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: MoneyRequest): ResponseEntity<*> =
+        toResponse(service.deposit(key, accountId, request.amount, request.description), "/api/v1/accounts/$accountId/deposits")
 
     @PostMapping("/accounts/{accountId}/withdrawals")
-    fun withdrawal(@PathVariable accountId: UUID, @RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: MoneyRequest) =
-        service.withdrawal(key, accountId, request.amount, request.description).map { toResponse(it, "/api/v1/accounts/$accountId/withdrawals") }
+    suspend fun withdrawal(@PathVariable accountId: UUID, @RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: MoneyRequest): ResponseEntity<*> =
+        toResponse(service.withdrawal(key, accountId, request.amount, request.description), "/api/v1/accounts/$accountId/withdrawals")
 
     @PostMapping("/transfers")
-    fun transfer(@RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: TransferRequest) =
-        service.transfer(key, request.fromAccountId, request.toAccountId, request.amount, request.description).map { toResponse(it, "/api/v1/transfers") }
+    suspend fun transfer(@RequestHeader("Idempotency-Key") key: UUID, @Valid @RequestBody request: TransferRequest): ResponseEntity<*> =
+        toResponse(service.transfer(key, request.fromAccountId, request.toAccountId, request.amount, request.description), "/api/v1/transfers")
 
     @GetMapping("/accounts/{accountId}/operations")
-    fun history(@PathVariable accountId: UUID, @RequestParam(defaultValue = "0") page: Int, @RequestParam(defaultValue = "20") size: Int): Mono<OperationPage> =
+    suspend fun history(@PathVariable accountId: UUID, @RequestParam(defaultValue = "0") page: Int, @RequestParam(defaultValue = "20") size: Int): OperationPage =
         service.history(accountId, page, size)
 
     @GetMapping("/operations/{operationId}")
-    fun get(@PathVariable operationId: UUID): Mono<OperationResponse> = service.get(operationId)
+    suspend fun get(@PathVariable operationId: UUID): OperationResponse = service.get(operationId)
 
     private fun toResponse(result: CommandResult, path: String): ResponseEntity<*> = when (result) {
         is CommandResult.Accepted -> ResponseEntity.status(if (result.replay) HttpStatus.OK else HttpStatus.CREATED).body(result.response)
