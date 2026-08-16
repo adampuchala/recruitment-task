@@ -12,3 +12,6 @@ databaseChangeLog:
   - include:
       file: changes/004-audit.sql
       relativeToChangelogFile: true
+  - include:
+      file: changes/005-index-cleanup.sql
+      relativeToChangelogFile: true
