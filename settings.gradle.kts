@@ -10,5 +10,6 @@ include(
     "financial-operations-service",
     "outbox-worker",
     "audit-consumer",
+    "mobile-bff",
     "shared-contracts",
 )

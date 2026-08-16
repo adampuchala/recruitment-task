@@ -45,6 +45,11 @@ val validateOpenApi by tasks.registering {
             ),
             "outbox-worker/openapi.yaml" to setOf("/actuator/health:"),
             "audit-consumer/openapi.yaml" to setOf("/actuator/health:"),
+            "mobile-bff/openapi.yaml" to setOf(
+                "/api/v1/mobile/accounts:",
+                "/api/v1/mobile/accounts/{accountId}:",
+                "/api/v1/mobile/accounts/{accountId}/deposits:",
+            ),
         )
 
         requiredPaths.forEach { (relativePath, paths) ->

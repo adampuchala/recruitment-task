@@ -31,15 +31,27 @@ Stop with `docker compose down`. Use `docker compose down -v` only when you inte
 - Financial Swagger UI: [http://localhost:8082/swagger-ui.html](http://localhost:8082/swagger-ui.html)
 - Financial OpenAPI JSON: [http://localhost:8082/v3/api-docs](http://localhost:8082/v3/api-docs)
 - Financial OpenAPI YAML: [financial-operations-service/openapi.yaml](financial-operations-service/openapi.yaml)
+- Mobile BFF API: `http://localhost:8080/api/v1/mobile/accounts`
+- Mobile BFF Swagger UI: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
+- Mobile BFF OpenAPI JSON: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
+- Mobile BFF OpenAPI YAML: [mobile-bff/openapi.yaml](mobile-bff/openapi.yaml)
 - Outbox Worker OpenAPI YAML: [outbox-worker/openapi.yaml](outbox-worker/openapi.yaml)
 - Audit Consumer OpenAPI YAML: [audit-consumer/openapi.yaml](audit-consumer/openapi.yaml)
-- Health: ports `8081`–`8084`, path `/actuator/health`
+- Health: ports `8080`–`8084`, path `/actuator/health`
 - PostgreSQL: `localhost:5432`
 - Redpanda Kafka: `localhost:19092`
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [COROUTINES_MIGRATION_PLAN.md](COROUTINES_MIGRATION_PLAN.md) and the linked Draw.io diagram. The principal consistency boundary is one PostgreSQL transaction containing balance changes, operation history, idempotency state and an outbox event. Kafka audit data is eventually consistent.
+
+### Mobile application
+
+The Kotlin Multiplatform mobile application is maintained in the separate sibling directory [`../mobile-app`](../mobile-app). Open that directory as a separate project in Android Studio to run the Android client; use its `MobileAppScheme` in Xcode for iOS. Start this backend stack first so the app can call the Mobile BFF at port `8080`.
+
+### Mobile BFF
+
+`mobile-bff` is a stateless optional façade for the native client. It delegates account creation and lookup to Account Service, and deposits to Financial Operations Service. It has no database, Liquibase or Kafka ownership. The supported API is intentionally limited to create account, retrieve account details and deposit funds; write requests require `Idempotency-Key` and the BFF forwards it unchanged.
 
 ### Architecture diagram
 

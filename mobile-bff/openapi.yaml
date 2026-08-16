@@ -1,0 +1,241 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
+openapi: 3.0.3
+info:
+  title: Mobile Banking BFF API
+  version: 1.0.0
+  description: Minimal unauthenticated API for account creation, account details and deposits.
+servers:
+  - url: http://localhost:8080
+    description: Local Docker Compose
+tags:
+  - name: Mobile accounts
+paths:
+  /api/v1/mobile/accounts:
+    post:
+      tags: [Mobile accounts]
+      operationId: createAccount
+      summary: Create an account
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DownstreamUnavailable' }
+  /api/v1/mobile/accounts/{accountId}:
+    get:
+      tags: [Mobile accounts]
+      operationId: getAccount
+      summary: Retrieve account details
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/DownstreamUnavailable' }
+  /api/v1/mobile/accounts/{accountId}/deposits:
+    post:
+      tags: [Mobile accounts]
+      operationId: depositFunds
+      summary: Deposit funds into an account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositRequest'
+      responses:
+        '201':
+          description: Deposit created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositResponse'
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/DownstreamUnavailable' }
+components:
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID generated once per user command and reused when retrying that command.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    CreateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [firstName, lastName]
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Anna
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Kowalska
+    DepositRequest:
+      type: object
+      additionalProperties: false
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          format: decimal
+          minimum: 0.0001
+          multipleOf: 0.0001
+          example: 100.0000
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          example: Mobile deposit
+    AccountResponse:
+      type: object
+      additionalProperties: false
+      required: [accountId, firstName, lastName, balance, status, createdAt, updatedAt]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        firstName:
+          type: string
+        lastName:
+          type: string
+        balance:
+          type: number
+          format: decimal
+          multipleOf: 0.0001
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DepositResponse:
+      type: object
+      additionalProperties: false
+      required: [operationId, type, status, toAccountId, amount, balanceAfter, createdAt]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [DEPOSIT]
+        status:
+          type: string
+          enum: [SUCCESS]
+        fromAccountId:
+          type: string
+          format: uuid
+          nullable: true
+        toAccountId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: decimal
+          multipleOf: 0.0001
+        balanceAfter:
+          type: number
+          format: decimal
+          multipleOf: 0.0001
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    AccountStatus:
+      type: string
+      enum: [ACTIVE, BLOCKED, CLOSED]
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, timestamp, path]
+      properties:
+        code:
+          type: string
+          example: ACCOUNT_NOT_FOUND
+        message:
+          type: string
+          example: Account not found
+        timestamp:
+          type: string
+          format: date-time
+        path:
+          type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    NotFound:
+      description: Account not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Conflict:
+      description: Business or idempotency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DownstreamUnavailable:
+      description: A required backend service is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'

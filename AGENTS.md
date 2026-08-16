@@ -32,7 +32,7 @@ The required backend features are:
 - Docker Compose startup;
 - Postman collection and README documentation.
 
-The mobile BFF and native mobile application are optional and should not delay completion of the backend.
+The native mobile application remains optional. The repository includes an optional, intentionally narrow Mobile BFF for account creation, account details and deposits; it must not become a second owner of account or financial business logic.
 
 ## Technology and infrastructure
 
@@ -68,6 +68,8 @@ Every service must include:
 - a short service-level `README.md` with purpose, local run instructions and configuration;
 - a Dockerfile or an explicit Docker Compose build configuration;
 - health/readiness configuration where practical.
+
+The Mobile BFF is the one service with no database ownership. It must not include Liquibase or runtime R2DBC configuration merely for structural symmetry. It uses coroutine-based, non-blocking `WebClient` adapters to delegate to the Account Service and Financial Operations Service.
 
 Every runnable service must have its own `Dockerfile`. Dockerfiles are runtime packaging files, not build environments: the application JAR must be built before the Docker image build and copied into the image. Do not run Gradle or build the JAR inside the Dockerfile.
 
@@ -117,6 +119,7 @@ Logical ownership is:
 - Financial Operations Service: `financial_operations` and financial-operation idempotency;
 - Outbox Worker: publication state in `financial_operation_result_outbox`;
 - Audit Consumer: `financial_operations_audit_events`.
+- Mobile BFF: no database tables; it only owns its mobile HTTP contract.
 
 The Financial Operations Service is explicitly allowed to update the balance and financial state in `user_accounts` because balance mutation, validation, history and outbox creation must happen in one PostgreSQL transaction. This is the deliberate shared-database exception documented in `ARCHITECTURE.md`.
 
@@ -215,6 +218,16 @@ Use guard clauses at the beginning of application methods for cheap precondition
 
 Authentication and authorization are intentionally out of scope for this recruitment MVP. Do not add partial security flows that distract from the required account and financial-operation behavior. Document this limitation in the root README and architecture trade-offs.
 
+## Mobile BFF rules
+
+The Mobile BFF is available at port `8080` and exposes only the client flows documented in [mobile-bff/openapi.yaml](mobile-bff/openapi.yaml):
+
+- `POST /api/v1/mobile/accounts`;
+- `GET /api/v1/mobile/accounts/{accountId}`;
+- `POST /api/v1/mobile/accounts/{accountId}/deposits`.
+
+It has no persistence, Kafka role, Liquibase changesets or business-rule copies. Keep its application layer limited to input validation, delegation and stable client-facing mapping. Forward `Idempotency-Key` unchanged for create-account and deposit commands. Do not retry write requests in the BFF, because the caller's retry plus the downstream idempotency contract is the single safe retry mechanism. Map unavailable downstream dependencies to `503`; preserve expected validation, not-found and business-conflict outcomes.
+
 ## Testing requirements
 
 Tests do not need exhaustive coverage. Prioritize behavior that proves the architecture works:
@@ -290,4 +303,4 @@ Document required environment variables and safe local defaults. Never commit se
 9. Add OpenAPI files, Postman collection and service/root READMEs.
 10. Run the complete stack from Docker Compose and verify the documented happy/error flows.
 
-When time is limited, prioritize transaction correctness, idempotency, outbox delivery and tests over the optional BFF or mobile client.
+When time is limited, prioritize transaction correctness, idempotency, outbox delivery and tests over expansion of the optional mobile client or BFF beyond its documented three endpoints.

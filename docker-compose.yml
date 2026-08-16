@@ -132,3 +132,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+
+  mobile-bff:
+    build: ./mobile-bff
+    environment:
+      ACCOUNT_SERVICE_BASE_URL: http://account-service:8081
+      FINANCIAL_OPERATIONS_SERVICE_BASE_URL: http://financial-operations-service:8082
+    ports:
+      - "8080:8080"
+    depends_on:
+      account-service:
+        condition: service_healthy
+      financial-operations-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

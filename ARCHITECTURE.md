@@ -6,7 +6,7 @@ Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
 
 The current high-level architecture is illustrated in [bank_4.drawio.svg](docs/bank_4.drawio.svg).
 
-The mobile BFF is optional. The initial implementation can expose the REST API directly to Postman and, later, to the native mobile client.
+The optional mobile BFF is implemented as a deliberately small client-facing façade. Postman can still call the backend APIs directly; a native client can use the BFF for its three supported flows: create account, retrieve account details and deposit funds.
 
 ## Goals and boundaries
 
@@ -45,6 +45,18 @@ It owns `user_accounts`. Account status rules:
 Responsible for deposits, withdrawals and transfers. It validates the account status and balance, locks the required account rows, updates balances, stores the operation history and creates an outbox event in one database transaction.
 
 For transfers, both accounts are locked in deterministic order by `account_id`. This prevents race conditions and avoids deadlocks caused by two simultaneous transfers in opposite directions.
+
+### Mobile BFF
+
+The Mobile BFF is a stateless Spring WebFlux service for the native-client scope. It owns no tables, does not connect to PostgreSQL, and is not a source of truth. It delegates to Account Service and Financial Operations Service over HTTP using non-blocking `WebClient` calls.
+
+It exposes only:
+
+- account creation;
+- account details retrieval;
+- deposit funds.
+
+For commands, it requires and forwards `Idempotency-Key` unchanged to the owning downstream service. It keeps client-facing DTOs and error responses stable, forwards expected business outcomes, and returns `503` when a required downstream service is unavailable. It does not introduce a local cache, retry writes, aggregate history, or implement authentication/authorization.
 
 ### Outbox Worker
 
@@ -371,6 +383,18 @@ Example response:
 }
 ```
 
+### Mobile BFF API
+
+The BFF provides a mobile-specific, intentionally restricted API under `/api/v1/mobile`:
+
+```http
+POST /api/v1/mobile/accounts
+GET  /api/v1/mobile/accounts/{accountId}
+POST /api/v1/mobile/accounts/{accountId}/deposits
+```
+
+The create-account and deposit endpoints require a UUID `Idempotency-Key`. Their request and response models are defined as a stable client-generation contract in [mobile-bff/openapi.yaml](mobile-bff/openapi.yaml). The BFF does not expose withdrawal, transfer, status changes, or operation history in this MVP.
+
 ### Error response
 
 All errors use a consistent shape:
@@ -457,6 +481,12 @@ For a production system with multiple independently deployed producers and consu
 
 Authentication and authorization are intentionally omitted from this recruitment MVP. Adding a partial identity and permission model would increase scope without improving the evaluation of the required account, transaction, concurrency, idempotency and Kafka behavior. A production implementation would add authentication, authorization and audit requirements before exposing the API publicly.
 
+### Minimal mobile BFF
+
+The BFF is limited to the three mobile flows required by the optional client and delegates rather than owning business logic or data. This protects a generated mobile API contract from direct backend topology, while avoiding duplication of account and financial rules.
+
+It does add one synchronous network hop and is not an API gateway or aggregation layer. There is no BFF database, cache, CQRS projection, local write retry, authentication or authorization. A production BFF would need authentication, user-to-account authorization, resilience policy and broader client workflows before becoming a public boundary.
+
 ### Overall assessment
 
 These trade-offs prioritize a correct and demonstrable financial core over production-scale distribution. The design keeps the balance update, operation history and outbox event in one transaction, while limiting asynchronous processing to audit events. This is appropriate for the scope of the exercise; a production version would likely move toward database-per-service ownership, a dedicated ledger, CQRS/read projections and selective caching.
@@ -465,6 +495,7 @@ These trade-offs prioritize a correct and demonstrable financial core over produ
 
 - The implementation is written in Kotlin on Java 25.
 - Application code uses Kotlin coroutines (`suspend`) over non-blocking Spring WebFlux, Netty and R2DBC. Reactor is retained only as an internal framework bridge.
+- The Mobile BFF is also coroutine-based and uses non-blocking `WebClient`; because it owns no persistent data, it does not use R2DBC or Liquibase.
 - Reactive transaction boundaries are expressed with `TransactionalOperator.executeAndAwait`; all account locks and financial writes remain on the same R2DBC transaction context.
 - A dedicated `db-migrations` Docker Compose service applies Liquibase changesets before application services start. Domain-model changes must be accompanied by new Liquibase changesets.
 - Configuration is supplied through environment variables; secrets are not committed.
