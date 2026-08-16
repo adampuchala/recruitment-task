@@ -89,9 +89,4 @@ The collection executes the following flow:
 9. Blocks the source account and verifies that another deposit is rejected with `409 ACCOUNT_BLOCKED`.
 10. Creates and closes a zero-balance account, then verifies that reopening a closed account is rejected.
 
-The collection uses fixed idempotency keys to make the replay scenario explicit. For a deterministic repeat of the entire collection, start with an empty database. The following command removes the local PostgreSQL and Redpanda volumes, so use it only when the existing local data can be discarded:
-
-```bash
-docker compose down -v
-docker compose up --build
-```
+The collection generates a fresh UUID idempotency key for every new command on each run. Only the deposit and its replay intentionally share `depositIdempotencyKey`, so the idempotency scenario remains explicit while the full collection can be run repeatedly against an existing local database.

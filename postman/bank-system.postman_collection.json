@@ -6,91 +6,471 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    {"key": "sourceAccountId", "value": ""},
-    {"key": "destinationAccountId", "value": ""},
-    {"key": "zeroAccountId", "value": ""},
-    {"key": "operationId", "value": ""}
+    {
+      "key": "sourceAccountId",
+      "value": ""
+    },
+    {
+      "key": "destinationAccountId",
+      "value": ""
+    },
+    {
+      "key": "zeroAccountId",
+      "value": ""
+    },
+    {
+      "key": "operationId",
+      "value": ""
+    },
+    {
+      "key": "depositIdempotencyKey",
+      "value": ""
+    }
   ],
   "item": [
     {
       "name": "01 Create source account",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "10000000-0000-0000-0000-000000000001"}], "body": {"mode": "raw", "raw": "{\n  \"firstName\": \"Anna\",\n  \"lastName\": \"Kowalska\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('sourceAccountId', pm.response.json().accountId);"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"Anna\",\n  \"lastName\": \"Kowalska\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('sourceAccountId', pm.response.json().accountId);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "02 Create destination account",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "10000000-0000-0000-0000-000000000002"}], "body": {"mode": "raw", "raw": "{\n  \"firstName\": \"Jan\",\n  \"lastName\": \"Nowak\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('destinationAccountId', pm.response.json().accountId);"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"Jan\",\n  \"lastName\": \"Nowak\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('destinationAccountId', pm.response.json().accountId);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "03 Deposit source",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000001"}], "body": {"mode": "raw", "raw": "{\n  \"amount\": 1000.00,\n  \"description\": \"Initial deposit\"\n}"}, "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('deposit created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('operationId', pm.response.json().operationId);"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{depositIdempotencyKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 1000.00,\n  \"description\": \"Initial deposit\"\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.collectionVariables.set('depositIdempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('deposit created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('operationId', pm.response.json().operationId);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "04 Replay deposit",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000001"}], "body": {"mode": "raw", "raw": "{\n  \"amount\": 1000.00,\n  \"description\": \"Initial deposit\"\n}"}, "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('replay returns 200', () => pm.response.to.have.status(200));", "pm.test('same operation', () => pm.expect(pm.response.json().operationId).to.eql(pm.collectionVariables.get('operationId')));"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{depositIdempotencyKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 1000.00,\n  \"description\": \"Initial deposit\"\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('replay returns 200', () => pm.response.to.have.status(200));",
+              "pm.test('same operation', () => pm.expect(pm.response.json().operationId).to.eql(pm.collectionVariables.get('operationId')));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "05 Transfer",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000002"}], "body": {"mode": "raw", "raw": "{\n  \"fromAccountId\": \"{{sourceAccountId}}\",\n  \"toAccountId\": \"{{destinationAccountId}}\",\n  \"amount\": 200.00,\n  \"description\": \"Transfer\"\n}"}, "url": "{{financialBaseUrl}}/api/v1/transfers"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('transfer created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('operationId', pm.response.json().operationId);"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fromAccountId\": \"{{sourceAccountId}}\",\n  \"toAccountId\": \"{{destinationAccountId}}\",\n  \"amount\": 200.00,\n  \"description\": \"Transfer\"\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/transfers"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('transfer created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('operationId', pm.response.json().operationId);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "06 Withdraw destination",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000003"}], "body": {"mode": "raw", "raw": "{\n  \"amount\": 50.00,\n  \"description\": \"ATM withdrawal\"\n}"}, "url": "{{financialBaseUrl}}/api/v1/accounts/{{destinationAccountId}}/withdrawals"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('withdrawal created', () => pm.response.to.have.status(201));"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 50.00,\n  \"description\": \"ATM withdrawal\"\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{destinationAccountId}}/withdrawals"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('withdrawal created', () => pm.response.to.have.status(201));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "07 Get source account",
-      "request": {"method": "GET", "url": "{{accountBaseUrl}}/api/v1/accounts/{{sourceAccountId}}"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('source balance is 800', () => { pm.response.to.have.status(200); pm.expect(Number(pm.response.json().balance)).to.eql(800); });"]}}]
+      "request": {
+        "method": "GET",
+        "url": "{{accountBaseUrl}}/api/v1/accounts/{{sourceAccountId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('source balance is 800', () => { pm.response.to.have.status(200); pm.expect(Number(pm.response.json().balance)).to.eql(800); });"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "08 Get destination account",
-      "request": {"method": "GET", "url": "{{accountBaseUrl}}/api/v1/accounts/{{destinationAccountId}}"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('destination balance is 150', () => { pm.response.to.have.status(200); pm.expect(Number(pm.response.json().balance)).to.eql(150); });"]}}]
+      "request": {
+        "method": "GET",
+        "url": "{{accountBaseUrl}}/api/v1/accounts/{{destinationAccountId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('destination balance is 150', () => { pm.response.to.have.status(200); pm.expect(Number(pm.response.json().balance)).to.eql(150); });"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "09 Get source history",
-      "request": {"method": "GET", "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/operations"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('history contains operations', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().totalElements).to.be.above(1); });"]}}]
+      "request": {
+        "method": "GET",
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/operations"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('history contains operations', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().totalElements).to.be.above(1); });"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "10 Get operation by ID",
-      "request": {"method": "GET", "url": "{{financialBaseUrl}}/api/v1/operations/{{operationId}}"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('operation found', () => pm.response.to.have.status(200));"]}}]
+      "request": {
+        "method": "GET",
+        "url": "{{financialBaseUrl}}/api/v1/operations/{{operationId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('operation found', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "11 Insufficient funds error",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000004"}], "body": {"mode": "raw", "raw": "{\n  \"amount\": 999999.00\n}"}, "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/withdrawals"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('insufficient funds is conflict', () => pm.response.to.have.status(409));", "pm.test('error code', () => pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_FUNDS'));"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 999999.00\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/withdrawals"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('insufficient funds is conflict', () => pm.response.to.have.status(409));",
+              "pm.test('error code', () => pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_FUNDS'));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "12 Block source",
-      "request": {"method": "PUT", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"status\": \"BLOCKED\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/status"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('blocked', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('BLOCKED'); });"]}}]
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"BLOCKED\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('blocked', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('BLOCKED'); });"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "13 Deposit to blocked account error",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "20000000-0000-0000-0000-000000000005"}], "body": {"mode": "raw", "raw": "{\n  \"amount\": 1.00\n}"}, "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('blocked account is conflict', () => pm.response.to.have.status(409));", "pm.test('error code', () => pm.expect(pm.response.json().code).to.eql('ACCOUNT_BLOCKED'));"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 1.00\n}"
+        },
+        "url": "{{financialBaseUrl}}/api/v1/accounts/{{sourceAccountId}}/deposits"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('blocked account is conflict', () => pm.response.to.have.status(409));",
+              "pm.test('error code', () => pm.expect(pm.response.json().code).to.eql('ACCOUNT_BLOCKED'));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "14 Create zero-balance account",
-      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Idempotency-Key", "value": "10000000-0000-0000-0000-000000000003"}], "body": {"mode": "raw", "raw": "{\n  \"firstName\": \"Zero\",\n  \"lastName\": \"Balance\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('zeroAccountId', pm.response.json().accountId);"]}}]
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"Zero\",\n  \"lastName\": \"Balance\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('zeroAccountId', pm.response.json().accountId);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "15 Close zero-balance account",
-      "request": {"method": "PUT", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"status\": \"CLOSED\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts/{{zeroAccountId}}/status"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('closed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('CLOSED'); });"]}}]
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"CLOSED\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts/{{zeroAccountId}}/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('closed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('CLOSED'); });"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "16 Reopen closed account error",
-      "request": {"method": "PUT", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"status\": \"ACTIVE\"\n}"}, "url": "{{accountBaseUrl}}/api/v1/accounts/{{zeroAccountId}}/status"},
-      "event": [{"listen": "test", "script": {"exec": ["pm.test('closed is terminal', () => pm.response.to.have.status(409));"]}}]
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+        },
+        "url": "{{accountBaseUrl}}/api/v1/accounts/{{zeroAccountId}}/status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('closed is terminal', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
     }
   ]
 }
