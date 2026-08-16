@@ -39,7 +39,8 @@ kotlin {
     }
 }
 
-val openapiSpecPath = "$projectDir/../openapi.yaml"
+// The Mobile BFF owns the canonical contract; never generate from a copied specification.
+val openapiSpecPath = "$projectDir/../../mobile-bff/openapi.yaml"
 val genDir = layout.buildDirectory.dir("generated/openapi")
 
 val generateKotlinxModels = tasks.register<GenerateTask>("generateKotlinxModels") {

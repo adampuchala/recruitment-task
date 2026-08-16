@@ -47,7 +47,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_
 
 ### Mobile application
 
-The Kotlin Multiplatform mobile application is maintained in the separate sibling directory [`../mobile-app`](../mobile-app). Open that directory as a separate project in Android Studio to run the Android client; use its `MobileAppScheme` in Xcode for iOS. Start this backend stack first so the app can call the Mobile BFF at port `8080`.
+The Kotlin Multiplatform mobile application is maintained in [`mobile-app`](mobile-app) within this repository. Open that directory as a separate project in Android Studio to run the Android client; use its `MobileAppScheme` in Xcode for iOS. Start this backend stack first so the app can call the Mobile BFF at port `8080`.
 
 ### Mobile BFF
 

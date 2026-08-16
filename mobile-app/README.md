@@ -17,17 +17,17 @@ The common Compose UI supports:
 
 The app calls the unauthenticated Mobile BFF at port `8080`. On Android Emulator it uses `http://10.0.2.2:8080`; on iOS Simulator it uses `http://localhost:8080`.
 
-Start the Banking BFF and its dependencies in the sibling backend repository before running the app:
+Start the Banking BFF and its dependencies from the repository root before running the app:
 
 ```bash
-cd ../hapoalim-recruitment-bank-system
+cd ..
 ./gradlew clean build
 docker compose up --build
 ```
 
 ## OpenAPI models and copyright
 
-The API contract is [openapi.yaml](openapi.yaml). It mirrors the BFF contract from `mobile-bff/openapi.yaml` in the backend repository. The `mobileapp-api-models` module generates Kotlin Multiplatform request and response models from that contract:
+The API contract is owned by the Mobile BFF at [`../mobile-bff/openapi.yaml`](../mobile-bff/openapi.yaml). The `mobileapp-api-models` module generates Kotlin Multiplatform request and response models directly from that canonical contract:
 
 ```bash
 ./gradlew :mobileapp-api-models:generateKotlinxModels

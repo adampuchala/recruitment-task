@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Recruitment adaptation — authoritative scope
 
-This repository is a recruitment adaptation of the open-source [KotlinConf App](https://github.com/JetBrains/kotlinconf-app). It retains the upstream Kotlin Multiplatform, Compose and Android/iOS UI foundation, but its active product scope is a simple banking client that consumes the sibling repository's Mobile BFF.
+This module is a recruitment adaptation of the open-source [KotlinConf App](https://github.com/JetBrains/kotlinconf-app). It retains the upstream Kotlin Multiplatform, Compose and Android/iOS UI foundation, but its active product scope is a simple banking client that consumes the Mobile BFF in the parent repository.
 
 Web, WebAssembly and Desktop modules from the upstream project have been removed intentionally. Do not restore or document them as supported targets. The active targets are Android and iOS, and the shared screen code belongs in `app/shared/src/commonMain`.
 
@@ -32,7 +32,7 @@ Android uses the `app.androidApp` run configuration in IDE; iOS uses `MobileAppS
 ## Module Structure
 
 ```
-:mobileapp-api-models — Kotlin Multiplatform API request/response models generated from `openapi.yaml`.
+:mobileapp-api-models — Kotlin Multiplatform API request/response models generated from `../mobile-bff/openapi.yaml`.
                         Do not edit `build/generated`; regenerate after contract changes.
 
 :core                 — Retained shared upstream support models. No UI or banking API ownership.
@@ -48,7 +48,7 @@ Android uses the `app.androidApp` run configuration in IDE; iOS uses `MobileAppS
 
 ## OpenAPI and copyright
 
-`openapi.yaml` must stay aligned with `mobile-bff/openapi.yaml` in the sibling backend repository. `mobileapp-api-models` generates the DTOs used by `BankApiClient`; it contains models only, not a generated HTTP client.
+`mobile-bff/openapi.yaml` is the canonical API contract. `mobileapp-api-models` generates the DTOs used by `BankApiClient` directly from that file; it contains models only, not a generated HTTP client. Do not create or maintain a second copy of the specification under `mobile-app`.
 
 The source code and build configuration of `mobileapp-api-models` are recruitment-specific code covered by the same notice and recruitment-only rule as the backend repository:
 
