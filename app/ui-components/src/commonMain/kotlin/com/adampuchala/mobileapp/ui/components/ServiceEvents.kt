@@ -1,0 +1,155 @@
+package com.adampuchala.mobileapp.ui.components
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import com.adampuchala.mobileapp.ui.theme.MobileAppTheme
+import com.adampuchala.mobileapp.ui.theme.PreviewHelper
+import androidx.compose.ui.tooling.preview.PreviewLightDark
+
+data class ServiceEventData(
+    val title: String,
+    val now: Boolean,
+    val note: String? = null,
+    val time: String? = null,
+)
+
+@Composable
+private fun ServiceEventItem(event: ServiceEventData) {
+    if (event.title.contains("Party", ignoreCase = true)) {
+        PartyEventCard(active = event.now) {
+            ServiceEventRow(event)
+        }
+    } else {
+        ServiceEventRow(event)
+    }
+}
+
+@Composable
+private fun ServiceEventRow(event: ServiceEventData) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.padding(16.dp).semantics(mergeDescendants = true) {}
+    ) {
+        Text(
+            text = event.title,
+            style = MobileAppTheme.typography.h3,
+            color = MobileAppTheme.colors.primaryText,
+        )
+
+        Spacer(Modifier.weight(1f))
+
+        AnimatedVisibility(event.now, enter = fadeIn(), exit = fadeOut()) {
+            NowLabel()
+        }
+
+        if (event.note != null) {
+            Text(
+                text = event.note,
+                style = MobileAppTheme.typography.text2,
+                color = MobileAppTheme.colors.noteText,
+                maxLines = 1,
+            )
+        }
+
+        if (event.time != null) {
+            Text(
+                text = event.time,
+                style = MobileAppTheme.typography.text2,
+                color = MobileAppTheme.colors.primaryText,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+fun ServiceEvent(
+    event: ServiceEventData,
+    modifier: Modifier = Modifier,
+) {
+    ServiceEvents(
+        events = listOf(event),
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun ServiceEvents(
+    events: List<ServiceEventData>,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .clip(MobileAppTheme.shapes.roundedCornerMd)
+            .background(MobileAppTheme.colors.tileBackground)
+    ) {
+        events.forEachIndexed { index, event ->
+            if (index > 0) {
+                HorizontalDivider(1.dp, MobileAppTheme.colors.strokePale)
+            }
+            ServiceEventItem(event)
+        }
+    }
+}
+
+@PreviewLightDark
+@Composable
+private fun ServiceEventPreview() = PreviewHelper {
+    ServiceEvent(
+        ServiceEventData(
+            title = "Breakfast",
+            now = false,
+            time = "9:00 – 10:00",
+        )
+    )
+}
+
+@PreviewLightDark
+@Composable
+private fun ServiceEventBlockPreview() = PreviewHelper {
+    ServiceEvents(
+        listOf(
+            ServiceEventData(
+                title = "Lunch",
+                now = false,
+                time = "12:00 – 13:00",
+                note = "In 30 min",
+            ),
+            ServiceEventData(
+                title = "Dinner",
+                now = true,
+                time = "17:00 – 18:00",
+            ),
+            ServiceEventData(
+                title = "Party",
+                now = false,
+            )
+        )
+    )
+}
+
+@PreviewLightDark
+@Composable
+private fun PartyServiceEventLivePreview() = PreviewHelper {
+    ServiceEvent(
+        ServiceEventData(
+            title = "Party!",
+            now = true,
+            time = "19:00 – 22:00",
+        )
+    )
+}
