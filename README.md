@@ -24,9 +24,15 @@ Stop with `docker compose down`. Use `docker compose down -v` only when you inte
 ## URLs
 
 - Account API: `http://localhost:8081/api/v1/accounts`
-- Account Swagger UI: `http://localhost:8081/swagger-ui.html`
+- Account Swagger UI: [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html)
+- Account OpenAPI JSON: [http://localhost:8081/v3/api-docs](http://localhost:8081/v3/api-docs)
+- Account OpenAPI YAML: [account-service/openapi.yaml](account-service/openapi.yaml)
 - Financial API: `http://localhost:8082/api/v1`
-- Financial Swagger UI: `http://localhost:8082/swagger-ui.html`
+- Financial Swagger UI: [http://localhost:8082/swagger-ui.html](http://localhost:8082/swagger-ui.html)
+- Financial OpenAPI JSON: [http://localhost:8082/v3/api-docs](http://localhost:8082/v3/api-docs)
+- Financial OpenAPI YAML: [financial-operations-service/openapi.yaml](financial-operations-service/openapi.yaml)
+- Outbox Worker OpenAPI YAML: [outbox-worker/openapi.yaml](outbox-worker/openapi.yaml)
+- Audit Consumer OpenAPI YAML: [audit-consumer/openapi.yaml](audit-consumer/openapi.yaml)
 - Health: ports `8081`–`8084`, path `/actuator/health`
 - PostgreSQL: `localhost:5432`
 - Redpanda Kafka: `localhost:19092`
@@ -38,6 +44,10 @@ Import `postman/bank-system.postman_collection.json` and `postman/local.postman_
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [COROUTINES_MIGRATION_PLAN.md](COROUTINES_MIGRATION_PLAN.md) and the linked Draw.io diagram. The principal consistency boundary is one PostgreSQL transaction containing balance changes, operation history, idempotency state and an outbox event. Kafka audit data is eventually consistent.
+
+### Architecture diagram
+
+![Bank system architecture](docs/bank_4.drawio.svg)
 
 ## Trade-offs
 

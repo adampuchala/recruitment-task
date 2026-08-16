@@ -5,6 +5,7 @@ import com.adampuchala.bank.account.domain.Account
 import com.adampuchala.bank.account.domain.AccountIdempotencyRecord
 import com.adampuchala.bank.account.domain.AccountRepository
 import com.adampuchala.bank.account.domain.AccountStatus
+import org.intellij.lang.annotations.Language
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.r2dbc.core.awaitOneOrNull
 import org.springframework.r2dbc.core.awaitRowsUpdated
@@ -40,7 +41,7 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
     }
 
     override suspend fun insert(account: Account) {
-        databaseClient.sql(
+        sql(
         """INSERT INTO user_accounts
            (account_id, first_name, last_name, balance, status, version, created_at, updated_at)
            VALUES (:id, :firstName, :lastName, :balance, :status, :version, :createdAt, :updatedAt)""",
@@ -56,7 +57,7 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
     }
 
     override suspend fun updateStatus(accountId: UUID, status: AccountStatus, updatedAt: Instant) {
-        databaseClient.sql(
+        sql(
         """UPDATE user_accounts SET status = :status, version = version + 1, updated_at = :updatedAt
            WHERE account_id = :accountId""",
     ).bind("status", status.name)
@@ -65,13 +66,13 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
         .fetch().awaitRowsUpdated()
     }
 
-    override suspend fun tryInsertIdempotency(key: UUID, requestHash: String): Boolean = databaseClient.sql(
+    override suspend fun tryInsertIdempotency(key: UUID, requestHash: String): Boolean = sql(
         """INSERT INTO create_account_idempotency_store
            (idempotency_key, request_hash, status, created_at)
            VALUES (:key, :hash, 'PENDING', now()) ON CONFLICT DO NOTHING""",
     ).bind("key", key).bind("hash", requestHash).fetch().awaitRowsUpdated() == 1L
 
-    override suspend fun findIdempotency(key: UUID): AccountIdempotencyRecord? = databaseClient.sql(
+    override suspend fun findIdempotency(key: UUID): AccountIdempotencyRecord? = sql(
         """SELECT idempotency_key, account_id, request_hash, response_payload::text AS response_payload, status
            FROM create_account_idempotency_store WHERE idempotency_key = :key""",
     ).bind("key", key).map { row, _ ->
@@ -85,7 +86,7 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
     }.awaitOneOrNull()
 
     override suspend fun completeIdempotency(key: UUID, accountId: UUID, responsePayload: String) {
-        databaseClient.sql(
+        sql(
         """UPDATE create_account_idempotency_store
            SET account_id = :accountId, response_payload = CAST(:payload AS jsonb), status = 'SUCCESS'
            WHERE idempotency_key = :key""",
@@ -94,4 +95,6 @@ class PostgresAccountRepository(private val databaseClient: DatabaseClient) : Ac
 
     private fun io.r2dbc.spi.Row.instant(column: String): Instant =
         get(column, OffsetDateTime::class.java)!!.toInstant()
+
+    private fun sql(@Language("PostgreSQL") query: String) = databaseClient.sql(query)
 }

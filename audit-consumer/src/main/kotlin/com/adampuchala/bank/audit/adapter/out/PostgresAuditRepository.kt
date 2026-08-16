@@ -14,7 +14,7 @@ import java.util.UUID
 @Repository
 class PostgresAuditRepository(private val databaseClient: DatabaseClient) : AuditRepository {
     override suspend fun insertIfAbsent(event: FinancialOperationCompleted): Boolean {
-        var spec = databaseClient.sql(
+        var spec = sql(
             """INSERT INTO financial_operations_audit_events
                (event_id, operation_id, from_account_id, to_account_id, amount, created_at)
                VALUES (:eventId, :operationId, :fromId, :toId, :amount, :createdAt)
@@ -27,6 +27,8 @@ class PostgresAuditRepository(private val databaseClient: DatabaseClient) : Audi
             .bindNullable("toId", event.toAccountId, UUID::class.java)
         return spec.fetch().awaitRowsUpdated() == 1L
     }
+
+    private fun sql(@Language("PostgreSQL") query: String) = databaseClient.sql(query)
 
     private fun <T : Any> DatabaseClient.GenericExecuteSpec.bindNullable(name: String, value: T?, type: Class<T>): DatabaseClient.GenericExecuteSpec =
         if (value == null) bindNull(name, type) else bind(name, value)

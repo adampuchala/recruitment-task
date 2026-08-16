@@ -15,6 +15,7 @@ import org.springframework.r2dbc.core.awaitRowsUpdated
 import org.springframework.stereotype.Repository
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
+import org.intellij.lang.annotations.Language
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -23,13 +24,13 @@ import java.util.UUID
 
 @Repository
 class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : FinancialRepository {
-    override suspend fun tryInsertIdempotency(key: UUID, hash: String): Boolean = databaseClient.sql(
+    override suspend fun tryInsertIdempotency(key: UUID, hash: String): Boolean = sql(
         """INSERT INTO financial_operations_idempotency_store
            (idempotency_key, request_hash, status, created_at)
            VALUES (:key, :hash, 'PENDING', now()) ON CONFLICT DO NOTHING""",
     ).bind("key", key).bind("hash", hash).fetch().awaitRowsUpdated() == 1L
 
-    override suspend fun findIdempotency(key: UUID): FinancialIdempotencyRecord? = databaseClient.sql(
+    override suspend fun findIdempotency(key: UUID): FinancialIdempotencyRecord? = sql(
         """SELECT request_hash, response_payload::text AS response_payload, status
            FROM financial_operations_idempotency_store WHERE idempotency_key = :key""",
     ).bind("key", key).map { row, _ ->
@@ -41,7 +42,7 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }.awaitOneOrNull()
 
     override suspend fun completeSuccess(key: UUID, operationId: UUID, payload: String) {
-        databaseClient.sql(
+        sql(
         """UPDATE financial_operations_idempotency_store
            SET operation_id = :operationId, response_payload = CAST(:payload AS jsonb), status = 'SUCCESS'
            WHERE idempotency_key = :key""",
@@ -49,14 +50,14 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }
 
     override suspend fun completeError(key: UUID, payload: String) {
-        databaseClient.sql(
+        sql(
         """UPDATE financial_operations_idempotency_store
            SET response_payload = CAST(:payload AS jsonb), status = 'ERROR'
            WHERE idempotency_key = :key""",
         ).bind("payload", payload).bind("key", key).fetch().awaitRowsUpdated()
     }
 
-    override suspend fun lockAccount(accountId: UUID): LockedAccount? = databaseClient.sql(
+    override suspend fun lockAccount(accountId: UUID): LockedAccount? = sql(
         """SELECT account_id, balance, status, version FROM user_accounts
            WHERE account_id = :accountId FOR UPDATE""",
     ).bind("accountId", accountId).map { row, _ ->
@@ -69,7 +70,7 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }.awaitOneOrNull()
 
     override suspend fun updateBalance(accountId: UUID, balance: BigDecimal, updatedAt: Instant) {
-        databaseClient.sql(
+        sql(
         """UPDATE user_accounts SET balance = :balance, version = version + 1, updated_at = :updatedAt 
            WHERE account_id = :accountId""",
     ).bind("balance", balance)
@@ -78,7 +79,7 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }
 
     override suspend fun insertOperation(operation: FinancialOperation) {
-        var spec = databaseClient.sql(
+        var spec = sql(
             """INSERT INTO financial_operations
                (operation_id, type, from_account_id, to_account_id, amount, status, description, created_at)
                VALUES (:id, :type, :fromId, :toId, :amount, :status, :description, :createdAt)""",
@@ -94,7 +95,7 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
     }
 
     override suspend fun insertOutbox(eventId: UUID, operationId: UUID, payload: String, createdAt: Instant) {
-        databaseClient.sql(
+        sql(
         """INSERT INTO financial_operation_result_outbox
            (event_id, operation_id, payload, status, attempts, created_at)
            VALUES (:eventId, :operationId, CAST(:payload AS jsonb), 'PENDING', 0, :createdAt)""",
@@ -102,21 +103,23 @@ class PostgresFinancialRepository(private val databaseClient: DatabaseClient) : 
         .bind("createdAt", OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC)).fetch().awaitRowsUpdated()
     }
 
-    override suspend fun findOperation(operationId: UUID): FinancialOperation? = databaseClient.sql(
+    override suspend fun findOperation(operationId: UUID): FinancialOperation? = sql(
         """SELECT operation_id, type, from_account_id, to_account_id, amount, status, description, created_at
            FROM financial_operations WHERE operation_id = :operationId""",
     ).bind("operationId", operationId).map(::mapOperation).awaitOneOrNull()
 
-    override suspend fun findByAccount(accountId: UUID, limit: Int, offset: Long): List<FinancialOperation> = databaseClient.sql(
+    override suspend fun findByAccount(accountId: UUID, limit: Int, offset: Long): List<FinancialOperation> = sql(
         """SELECT operation_id, type, from_account_id, to_account_id, amount, status, description, created_at
            FROM financial_operations
            WHERE from_account_id = :accountId OR to_account_id = :accountId
            ORDER BY created_at DESC, operation_id DESC LIMIT :limit OFFSET :offset""",
     ).bind("accountId", accountId).bind("limit", limit).bind("offset", offset).map(::mapOperation).all().asFlow().toList()
 
-    override suspend fun countByAccount(accountId: UUID): Long = databaseClient.sql(
+    override suspend fun countByAccount(accountId: UUID): Long = sql(
         "SELECT COUNT(*) AS count FROM financial_operations WHERE from_account_id = :accountId OR to_account_id = :accountId",
     ).bind("accountId", accountId).map { row, _ -> row.get("count", java.lang.Long::class.java)!!.toLong() }.awaitOne()
+
+    private fun sql(@Language("PostgreSQL") query: String) = databaseClient.sql(query)
 
     private fun mapOperation(row: Row, metadata: io.r2dbc.spi.RowMetadata) = FinancialOperation(
         row.get("operation_id", UUID::class.java)!!,
