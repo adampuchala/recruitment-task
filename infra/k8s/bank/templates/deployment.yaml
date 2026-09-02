@@ -1,0 +1,737 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank
+
+---
+# ============================================================
+# CONFIG
+# ============================================================
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-secret
+  namespace: bank
+type: Opaque
+stringData:
+  username: bank
+  password: bank
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bank-config
+  namespace: bank
+data:
+  database-url: r2dbc:postgresql://postgres:5432/bank
+  kafka-bootstrap-servers: redpanda:9092
+  kafka-topic: financial-operations
+
+---
+# ============================================================
+# POSTGRES
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: bank
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: bank
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: bank
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U bank -d bank
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U bank -d bank
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+# ============================================================
+# LIQUIBASE MIGRATIONS
+# ============================================================
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrations
+  namespace: bank
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: db-migrations
+    spec:
+      restartPolicy: OnFailure
+
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:17-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready \
+                -h postgres \
+                -p 5432 \
+                -U bank \
+                -d bank
+              do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+
+      containers:
+        - name: liquibase
+          image: recruitment-task-main-db-migrations:latest
+          imagePullPolicy: Never
+          env:
+            - name: LIQUIBASE_COMMAND_URL
+              value: jdbc:postgresql://postgres:5432/bank
+            - name: LIQUIBASE_COMMAND_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: LIQUIBASE_COMMAND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+
+---
+# ============================================================
+# REDPANDA
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: bank
+spec:
+  selector:
+    app: redpanda
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  namespace: bank
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+        - name: redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+          command:
+            - /usr/bin/rpk
+            - redpanda
+            - start
+          args:
+            - --overprovisioned
+            - --smp=1
+            - --memory=512M
+            - --reserve-memory=0M
+            - --node-id=0
+          env:
+            - name: REDPANDA_KAFKA_ADDR
+              value: "internal://redpanda:9092"
+            - name: REDPANDA_ADVERTISE_KAFKA_ADDR
+              value: "internal://redpanda:9092"
+          ports:
+            - containerPort: 9092
+              name: kafka
+            - containerPort: 9644
+              name: redpandal
+          readinessProbe:
+            exec:
+              command:
+                - rpk
+                - cluster
+                - health
+                - --exit-when-healthy
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            failureThreshold: 30
+
+---
+# ============================================================
+# REDPANDA TOPIC INIT
+# ============================================================
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redpanda-init
+  namespace: bank
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: redpanda-init
+    spec:
+      restartPolicy: OnFailure
+
+      initContainers:
+        - name: wait-for-redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+          command:
+            - sh
+            - -c
+            - |
+              until rpk cluster health \
+                -X brokers=redpanda:9092 \
+                --exit-when-healthy
+              do
+                echo "Waiting for Redpanda..."
+                sleep 2
+              done
+
+      containers:
+        - name: create-topics
+          image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+
+              for topic in financial-operations financial-operations.DLT
+              do
+                rpk topic create "$topic" \
+                  -X brokers=redpanda:9092 \
+                  --partitions 3 \
+                  --replicas 1 \
+                  || rpk topic describe "$topic" \
+                    -X brokers=redpanda:9092
+              done
+
+---
+# ============================================================
+# ACCOUNT SERVICE
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+  namespace: bank
+spec:
+  selector:
+    app: account-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  namespace: bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+    spec:
+
+      initContainers:
+        - name: wait-for-migrations
+          image: postgres:17-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          command:
+            - sh
+            - -c
+            - |
+              until psql \
+                -h postgres \
+                -U bank \
+                -d bank \
+                -c "SELECT 1 FROM databasechangelog LIMIT 1" \
+                >/dev/null 2>&1
+              do
+                echo "Waiting for database migrations..."
+                sleep 2
+              done
+
+      containers:
+        - name: account-service
+          image: recruitment-task-main-account-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8081
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: database-url
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# ============================================================
+# FINANCIAL OPERATIONS SERVICE
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: financial-operations-service
+  namespace: bank
+spec:
+  selector:
+    app: financial-operations-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: financial-operations-service
+  namespace: bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: financial-operations-service
+  template:
+    metadata:
+      labels:
+        app: financial-operations-service
+    spec:
+
+      initContainers:
+        - name: wait-for-migrations
+          image: postgres:17-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          command:
+            - sh
+            - -c
+            - |
+              until psql \
+                -h postgres \
+                -U bank \
+                -d bank \
+                -c "SELECT 1 FROM databasechangelog LIMIT 1" \
+                >/dev/null 2>&1
+              do
+                echo "Waiting for database migrations..."
+                sleep 2
+              done
+
+      containers:
+        - name: financial-operations-service
+          image: recruitment-task-main-financial-operations-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8082
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: database-url
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# ============================================================
+# OUTBOX WORKER
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: outbox-worker
+  namespace: bank
+spec:
+  selector:
+    app: outbox-worker
+  ports:
+    - port: 8083
+      targetPort: 8083
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbox-worker
+  namespace: bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: outbox-worker
+  template:
+    metadata:
+      labels:
+        app: outbox-worker
+    spec:
+
+      initContainers:
+        - name: wait-for-migrations
+          image: postgres:17-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          command:
+            - sh
+            - -c
+            - |
+              until psql \
+                -h postgres \
+                -U bank \
+                -d bank \
+                -c "SELECT 1 FROM databasechangelog LIMIT 1" \
+                >/dev/null 2>&1
+              do
+                echo "Waiting for database migrations..."
+                sleep 2
+              done
+
+        - name: wait-for-topic
+          image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+          command:
+            - sh
+            - -c
+            - |
+              until rpk topic describe financial-operations \
+                -X brokers=redpanda:9092
+              do
+                echo "Waiting for Kafka topic..."
+                sleep 2
+              done
+
+      containers:
+        - name: outbox-worker
+          image: recruitment-task-main-outbox-worker:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8083
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: database-url
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: kafka-bootstrap-servers
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: kafka-topic
+
+---
+# ============================================================
+# AUDIT CONSUMER
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-consumer
+  namespace: bank
+spec:
+  selector:
+    app: audit-consumer
+  ports:
+    - port: 8084
+      targetPort: 8084
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-consumer
+  namespace: bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-consumer
+  template:
+    metadata:
+      labels:
+        app: audit-consumer
+    spec:
+
+      initContainers:
+        - name: wait-for-migrations
+          image: postgres:17-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+          command:
+            - sh
+            - -c
+            - |
+              until psql \
+                -h postgres \
+                -U bank \
+                -d bank \
+                -c "SELECT 1 FROM databasechangelog LIMIT 1" \
+                >/dev/null 2>&1
+              do
+                echo "Waiting for database migrations..."
+                sleep 2
+              done
+
+        - name: wait-for-topic
+          image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
+          command:
+            - sh
+            - -c
+            - |
+              until rpk topic describe financial-operations \
+                -X brokers=redpanda:9092
+              do
+                echo "Waiting for Kafka topic..."
+                sleep 2
+              done
+
+      containers:
+        - name: audit-consumer
+          image: recruitment-task-main-audit-consumer:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8084
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: database-url
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secret
+                  key: password
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: kafka-bootstrap-servers
+            - name: AUDIT_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: bank-config
+                  key: kafka-topic
+
+---
+# ============================================================
+# MOBILE BFF
+# ============================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobile-bff
+  namespace: bank
+spec:
+  type: NodePort
+  selector:
+    app: mobile-bff
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mobile-bff
+  namespace: bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mobile-bff
+  template:
+    metadata:
+      labels:
+        app: mobile-bff
+    spec:
+
+      initContainers:
+        - name: wait-for-account-service
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fsS http://account-service:8081/actuator/health
+              do
+                echo "Waiting for account-service..."
+                sleep 2
+              done
+
+        - name: wait-for-financial-service
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fsS http://financial-operations-service:8082/actuator/health
+              do
+                echo "Waiting for financial-operations-service..."
+                sleep 2
+              done
+
+      containers:
+        - name: mobile-bff
+          image: recruitment-task-main-mobile-bff:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ACCOUNT_SERVICE_BASE_URL
+              value: http://account-service:8081
+            - name: FINANCIAL_OPERATIONS_SERVICE_BASE_URL
+              value: http://financial-operations-service:8082
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
