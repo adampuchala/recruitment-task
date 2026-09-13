@@ -1,3 +1,4 @@
+# Copyright (c) Adam Puchała Software Engineering. For recruitment purposes only.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -170,6 +171,9 @@ spec:
     - name: kafka
       port: 9092
       targetPort: 9092
+    - name: admin
+      port: 9644
+      targetPort: 9644
 
 ---
 apiVersion: apps/v1
@@ -217,6 +221,8 @@ spec:
                 - rpk
                 - cluster
                 - health
+                - -X
+                - admin.hosts=127.0.0.1:9644
                 - --exit-when-healthy
             initialDelaySeconds: 5
             periodSeconds: 3
@@ -250,6 +256,7 @@ spec:
             - |
               until rpk cluster health \
                 -X brokers=redpanda:9092 \
+                -X admin.hosts=redpanda:9644 \
                 --exit-when-healthy
               do
                 echo "Waiting for Redpanda..."
