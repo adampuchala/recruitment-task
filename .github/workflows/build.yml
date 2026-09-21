@@ -12,7 +12,7 @@ on:
 jobs:
   build-and-pack:
     runs-on: self-hosted
-
+    timeout-minutes: 15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
