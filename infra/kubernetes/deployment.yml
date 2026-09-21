@@ -196,16 +196,9 @@ spec:
         - name: redpanda
           image: docker.redpanda.com/redpandadata/redpanda:v25.1.9
           command:
+            - /usr/bin/rpk
             - redpanda
             - start
-            - --overprovisioned
-            - --smp=1
-            - --memory=512M
-            - --reserve-memory=0M
-            - --node-id=0
-            - --check=false
-            - --kafka-addr=internal://0.0.0.0:9092
-            - --advertise-kafka-addr=internal://redpanda:9092
           ports:
             - containerPort: 9092
               name: kafka
