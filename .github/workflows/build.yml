@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-and-pack:
-    runs-on: fedora-utm
+    runs-on: self-hosted
 
     steps:
       - name: Checkout Code
