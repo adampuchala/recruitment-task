@@ -34,7 +34,7 @@ jobs:
 
       - name: Build Docker Image using Podman
         run: |
-          podman-compose build
+          podman compose build
 
       - name: List local images
         run: podman images
